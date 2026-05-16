@@ -53,7 +53,7 @@ def load_data():
         return df
     return pd.DataFrame(columns=["Ticker", "Broker", "Account", "Shares"])
 
-# Re-engineered using hyper-fast metadata endpoints to guarantee dividend lookup execution
+# Re-engineered using standard fast_info metadata endpoints to avoid API blocking
 @st.cache_data(ttl=60)
 def get_market_data(tickers_list):
     price_dict = {}
@@ -95,22 +95,23 @@ def get_market_data(tickers_list):
                 else:
                     price_dict[t_upper]["currency"] = "USD"
                 
-                # 2. OPTIMIZED FAST INFO ENDPOINT: Grab pre-calculated corporate statistics directly
-                info_data = ticker_data.info
-                if info_data:
-                    # Snag trailing dividend rate or generic rate flags
-                    div_rate = info_data.get("dividendRate") or info_data.get("trailingAnnualDividendRate") or 0.0
-                    price_dict[t_upper]["annual_div"] = float(div_rate)
-                    
-                    # Capture exact most recent distribution specs safely
-                    last_div_value = info_data.get("lastDividendValue")
-                    if last_div_value:
-                        price_dict[t_upper]["last_div_amt"] = float(last_div_value)
-                        
-                        # Convert raw epoch payment date timestamps into clean text formats
-                        last_div_date_epoch = info_data.get("lastDividendDate")
-                        if last_div_date_epoch:
-                            price_dict[t_upper]["last_div_date"] = pd.to_datetime(last_div_date_epoch, unit='s').strftime('%Y-%m-%d')
+                # 2. BULLETPROOF FAST_INFO LOOKUP: Safely reads annual fields without authentication flags
+                fast_meta = ticker_data.fast_info
+                if fast_meta:
+                    div_yield_pct = fast_meta.get("dividend_yield", 0.0)
+                    # If a yield percentage exists, multiply by stock price to extract annual payout rate
+                    if div_yield_pct and div_yield_pct > 0:
+                        price_dict[t_upper]["annual_div"] = price_dict[t_upper]["price"] * div_yield_pct
+                
+                # 3. BACKUP RECENT LOG LOOKUP: Grabs the standalone latest single dividend value distribution specs
+                div_series = ticker_data.dividends
+                if div_series is not None and not div_series.empty:
+                    price_dict[t_upper]["last_div_amt"] = float(div_series.iloc[-1])
+                    price_dict[t_upper]["last_div_date"] = div_series.index[-1].strftime('%Y-%m-%d')
+                    # Double-check fallback for index funds that mask fast_info yields
+                    if price_dict[t_upper]["annual_div"] == 0.0:
+                        recent_1y = div_series.last('365d')
+                        price_dict[t_upper]["annual_div"] = recent_1y.sum() if not recent_1y.empty else 0.0
         except Exception:
             pass
             
@@ -198,8 +199,91 @@ if not df_inv.empty:
     total_portfolio_value_cad = df_inv["Total Value (CAD)"].sum()
     total_annual_dividends_cad = df_inv["Annual Income (CAD)"].sum()
     
+    # TYPO REPAIRED COMPLETELY HERE
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Net Worth (CAD)", f"${total_portfolio_value_cad:,.2f}")
     col2.metric("Projected Annual Dividends", f"${total_annual_dividends_cad:,.2f}")
     col3.metric("FX Rate (USD/CAD)", f"${usd_cad_rate:.4f}")
-    col4.metric("Total Asset Rows", len(df_
+    col4.metric("Total Asset Rows", len(df_inv))
+
+    # --- 🏆 TOP 20 GLOBAL HOLDINGS CONSOLIDATOR ---
+    st.markdown("### 🏆 Top 20 Consolidated Global Holdings")
+    
+    df_top = df_inv.groupby(["Ticker", "Currency", "Raw Price", "Price (CAD)"]).agg({
+        "Shares": "sum",
+        "Total Value (CAD)": "sum"
+    }).reset_index()
+    
+    df_top["Portfolio Weight"] = (df_top["Total Value (CAD)"] / total_portfolio_value_cad) * 100
+    df_top = df_top.sort_values(by="Total Value (CAD)", ascending=False).head(20)
+    
+    df_top["Live Price"] = df_top.apply(
+        lambda r: "Manual Override" if r["Raw Price"] == 0.0 else f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1
+    )
+    
+    st.dataframe(
+        df_top[["Ticker", "Shares", "Live Price", "Total Value (CAD)", "Portfolio Weight"]].style.format({
+            "Shares": "{:.6f}",
+            "Total Value (CAD)": "${:,.2f}",
+            "Portfolio Weight": "{:.2f}%"
+        }),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    # --- 📅 RECENT DIVIDEND HISTORY LOG ---
+    st.markdown("### 📅 Recent Dividend History (Last Distributions)")
+    
+    df_div_log = pd.DataFrame([t.upper().strip() for t in unique_tickers], columns=["Ticker"])
+    df_div_log["Last Dividend Payout"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("last_div_amt", 0.0))
+    df_div_log["Currency"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("currency", "CAD"))
+    df_div_log["Payment Date"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("last_div_date", "N/A"))
+    
+    df_div_log = df_div_log[df_div_log["Last Dividend Payout"] > 0]
+    
+    if not df_div_log.empty:
+        df_div_log["Distribution Amount"] = df_div_log.apply(lambda r: f"${r['Last Dividend Payout']:,.4f} {r['Currency']}", axis=1)
+        df_div_log = df_div_log.sort_values(by="Payment Date", ascending=False)
+        
+        st.dataframe(
+            df_div_log[["Ticker", "Distribution Amount", "Payment Date"]],
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("No active dividend histories detected among current portfolio ticker symbols.")
+
+    # --- 5. DETAILED ACCOUNT BREAKDOWNS ---
+    st.markdown("---")
+    st.markdown("### 📋 Complete Location & Account Breakdown")
+    
+    df_display = df_inv.copy()
+    df_display["Live Price"] = df_display.apply(
+        lambda r: "Manual Override" if r["Raw Price"] == 0.0 else f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1
+    )
+    df_display = df_display.sort_values(by=["Broker", "Ticker"])
+    
+    st.dataframe(
+        df_display[[ "Ticker", "Broker", "Account", "Shares", "Live Price", "Total Value (CAD)" ]].style.format({
+            "Shares": "{:.6f}",
+            "Total Value (CAD)": "${:,.2f}"
+        }), 
+        use_container_width=True, 
+        hide_index=True
+    )
+
+    # --- 6. SUMMARY BUCKETS ---
+    st.markdown("---")
+    c1, c2 = st.columns(2)
+    
+    with c1:
+        st.write("#### 📂 Valuation by Account (CAD)")
+        acct_summary = df_inv.groupby("Account")["Total Value (CAD)"].sum().reset_index()
+        st.dataframe(acct_summary.style.format({"Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
+        
+    with c2:
+        st.write("#### 🏦 Valuation by Location (CAD)")
+        broker_summary = df_inv.groupby("Broker")["Total Value (CAD)"].sum().reset_index()
+        st.dataframe(broker_summary.style.format({"Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
+else:
+    st.info("Your inventory is currently empty. Use the sidebar to log your first set of shares or upload a backup file.")
