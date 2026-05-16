@@ -6,7 +6,6 @@ import yfinance as yf
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="Portfolio Inventory")
 
-# Custom Neon Blue Styling + Header & Mobile Responsiveness
 st.markdown("""
     <style>
     .stApp { background-color: #050505; }
@@ -28,7 +27,6 @@ st.markdown("""
     }
     label[data-testid="stMetricLabel"] { color: #BBBBBB !important; text-transform: uppercase; }
     div[data-testid="stMetricValue"] { color: #00FFFF !important; }
-    
     @media (max-width: 768px) {
         .block-container {
             padding-top: 1rem !important;
@@ -41,8 +39,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# Main Title Header
-st.write("### 🧊 TOTAL INVESTMENT PORTFOLIO (CAD GLOBAL VIEW)")
+st.write(f"### 🧊 TOTAL INVESTMENT PORTFOLIO (CAD GLOBAL VIEW)")
 st.markdown("---")
 
 # --- 2. DATA HANDLING ---
@@ -58,7 +55,6 @@ def load_data():
 def get_market_data(tickers_list):
     price_dict = {}
     
-    # Always fetch the live USD/CAD conversion rate first
     try:
         fx = yf.Ticker("USDCAD=X")
         fx_data = fx.history(period='5d')
@@ -74,7 +70,7 @@ def get_market_data(tickers_list):
             price_dict[t] = {"price": 1.00, "currency": "USD" if t_upper.startswith("USD") else "CAD"}
             continue
             
-        # 2. Standard Equity Price Lookup
+        # 2. Standard Equity Price Lookup (5-day fallback for weekends)
         try:
             ticker_data = yf.Ticker(t_upper)
             todays_data = ticker_data.history(period='5d')
@@ -119,10 +115,10 @@ if uploaded_file is not None:
         st.sidebar.error(f"Error: {e}")
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 For Cash: Use 'CADCASH' for Canadian cash, or 'USDCASH' for US cash balances.")
+st.sidebar.info("💡 Tip: Convert Canadian '.UN' REITs to '-UN.TO' (e.g., REI-UN.TO).")
 
 with st.sidebar.form(key="update_form", clear_on_submit=True):
-    ticker = st.text_input("Ticker Symbol (e.g. VEQT.TO, VT, CADCASH)").upper().strip()
+    ticker = st.text_input("Ticker Symbol").upper().strip()
     broker = st.selectbox("Brokerage / Location", ["TD Waterhouse", "Wealthsimple", "Interactive Brokers", "DRIP / Transfer Agent", "Other"])
     account = st.selectbox("Account Type", ["RRSP", "TFSA", "Non-Reg", "Crypto", "Direct Registered"])
     new_shares = st.number_input("Total Shares / Cash Amount", min_value=0.0, step=0.000001, format="%.6f")
@@ -157,9 +153,12 @@ if not df_inv.empty:
     df_inv["Raw Price"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"price": 0.0})["price"])
     df_inv["Currency"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"currency": "CAD"})["currency"])
     
+    # SAFETY OVERRIDE: If ticker is completely unrecognized and returns 0, treat its "shares" as a flat 1:1 CAD value
     df_inv["Price (CAD)"] = df_inv.apply(
-        lambda r: r["Raw Price"] * usd_cad_rate if r["Currency"] == "USD" else r["Raw Price"], axis=1
+        lambda r: 1.00 if r["Raw Price"] == 0.0 
+        else (r["Raw Price"] * usd_cad_rate if r["Currency"] == "USD" else r["Raw Price"]), axis=1
     )
+    
     df_inv["Total Value (CAD)"] = df_inv["Shares"] * df_inv["Price (CAD)"]
 
     total_portfolio_value_cad = df_inv["Total Value (CAD)"].sum()
@@ -173,7 +172,11 @@ if not df_inv.empty:
     st.markdown("### 📋 Current Valuation Inventory")
     
     df_display = df_inv.copy()
-    df_display["Live Price"] = df_display.apply(lambda r: f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1)
+    
+    # Formatted display text for unrecognized overrides
+    df_display["Live Price"] = df_display.apply(
+        lambda r: "Manual (Flat $1)" if r["Raw Price"] == 0.0 else f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1
+    )
     df_display = df_display.sort_values(by=["Broker", "Ticker"])
     
     st.dataframe(
