@@ -77,7 +77,6 @@ def get_market_data(tickers_list):
             if not todays_data.empty:
                 live_price = todays_data['Close'].iloc[-1]
                 
-                # SMART CURRENCY CHECK: If it has .TO, .V, or ends in -CAD, it's native Canadian data
                 if (".TO" in t_upper) or (".V" in t_upper) or (t_upper.endswith("-CAD")):
                     currency = "CAD"
                 else:
@@ -121,13 +120,15 @@ if uploaded_file is not None:
         st.sidebar.error(f"Error: {e}")
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 Tip: Convert Canadian '.UN' REITs to '-UN.TO' (e.g., REI-UN.TO). Use '-CAD' for direct crypto pairs.")
+st.sidebar.info("💡 Tip: Use 'CADCASH' with a negative value (e.g. -5000) to record a margin loan liability.")
 
 with st.sidebar.form(key="update_form", clear_on_submit=True):
     ticker = st.text_input("Ticker Symbol").upper().strip()
     broker = st.selectbox("Brokerage / Location", ["TD Waterhouse", "Wealthsimple", "Interactive Brokers", "DRIP / Transfer Agent", "Other"])
     account = st.selectbox("Account Type", ["RRSP", "TFSA", "Non-Reg", "Crypto", "Direct Registered"])
-    new_shares = st.number_input("Total Shares / Cash Amount", min_value=0.0, step=0.000001, format="%.6f")
+    
+    # UNLOCKED: Removed min_value to fully support negative entries
+    new_shares = st.number_input("Total Shares / Cash Amount", step=0.000001, format="%.6f")
     submit_button = st.form_submit_button(label="Update Inventory")
 
 if submit_button and ticker:
@@ -143,7 +144,8 @@ if submit_button and ticker:
         df = pd.concat([df, new_row], ignore_index=True)
         st.sidebar.success(f"Added {ticker_clean}: {new_shares:.6f}.")
     
-    df = df[df['Shares'] > 0]
+    # UNLOCKED: Only delete rows if they are exactly 0, leaving negatives intact
+    df = df[df['Shares'] != 0]
     df.to_csv(CSV_FILE, index=False)
     st.rerun()
 
@@ -180,7 +182,7 @@ if not df_inv.empty:
     
     df_top = df_inv.groupby(["Ticker", "Currency", "Raw Price", "Price (CAD)"]).agg({
         "Shares": "sum",
-        "Total Value (CAD)": "sum"
+        "Total Value (CAD)" : "sum"
     }).reset_index()
     
     df_top["Portfolio Weight"] = (df_top["Total Value (CAD)"] / total_portfolio_value_cad) * 100
