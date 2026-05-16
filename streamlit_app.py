@@ -50,7 +50,7 @@ def load_data():
         return pd.read_csv(CSV_FILE)
     return pd.DataFrame(columns=["Ticker", "Broker", "Account", "Shares"])
 
-# Helper function to get live prices and handle currency/cash tracking
+# Enhanced to gather live prices, currency metadata, and live dividend actions
 @st.cache_data(ttl=60)
 def get_market_data(tickers_list):
     price_dict = {}
@@ -65,32 +65,54 @@ def get_market_data(tickers_list):
     for t in tickers_list:
         t_upper = str(t).strip().upper()
         
+        # Default fallback metadata structure
+        price_dict[t] = {
+            "price": 0.0, 
+            "currency": "CAD", 
+            "annual_div": 0.0, 
+            "last_div_amt": 0.0, 
+            "last_div_date": "N/A"
+        }
+        
         # 1. Smart Cash Check
         if t_upper == "TCSH" or "CASH" in t_upper:
-            price_dict[t] = {"price": 1.00, "currency": "USD" if t_upper.startswith("USD") else "CAD"}
+            price_dict[t]["price"] = 1.00
+            price_dict[t]["currency"] = "USD" if t_upper.startswith("USD") else "CAD"
             continue
             
-        # 2. Standard Equity & Crypto Price Lookup
+        # 2. Standard Equity / Crypto / Preferred Data Lookup
         try:
             ticker_data = yf.Ticker(t_upper)
+            
+            # Fetch Price Data
             todays_data = ticker_data.history(period='5d')
             if not todays_data.empty:
-                live_price = todays_data['Close'].iloc[-1]
+                price_dict[t]["price"] = todays_data['Close'].iloc[-1]
                 
+                # Assign Currency Flag
                 if (".TO" in t_upper) or (".V" in t_upper) or (t_upper.endswith("-CAD")):
-                    currency = "CAD"
+                    price_dict[t]["currency"] = "CAD"
                 else:
-                    currency = "USD"
+                    price_dict[t]["currency"] = "USD"
+                
+                # Fetch Corporate Dividend History
+                div_history = ticker_data.dividends
+                if not div_history.empty:
+                    # Calculate trailing annual total dividend amount
+                    recent_1y = div_history.last('365d')
+                    price_dict[t]["annual_div"] = recent_1y.sum() if not recent_1y.empty else 0.0
                     
-                price_dict[t] = {"price": live_price, "currency": currency}
-            else:
-                price_dict[t] = {"price": 0.0, "currency": "CAD"}
+                    # Capture the absolute latest standalone dividend payment details
+                    last_date = div_history.index[-1]
+                    price_dict[t]["last_div_amt"] = div_history.iloc[-1]
+                    price_dict[t]["last_div_date"] = last_date.strftime('%Y-%m-%d')
+                    
         except Exception:
-            price_dict[t] = {"price": 0.0, "currency": "CAD"}
+            pass  # Fall back directly to default manual override tracking arrays
             
     return price_dict, usd_cad_rate
 
-# --- 3. SIDEBAR: DATA CONTROLS & OVERRIDE FORM ---
+# --- 3. SIDEBAR: DATA CONTROLS & FORM ---
 st.sidebar.header("🔄 Adjust Holdings")
 
 st.sidebar.markdown("### 💾 Cloud Data Backup")
@@ -120,14 +142,11 @@ if uploaded_file is not None:
         st.sidebar.error(f"Error: {e}")
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 Tip: Use 'CADCASH' with a negative value (e.g. -5000) to record a margin loan liability.")
 
 with st.sidebar.form(key="update_form", clear_on_submit=True):
     ticker = st.text_input("Ticker Symbol").upper().strip()
     broker = st.selectbox("Brokerage / Location", ["TD Waterhouse", "Wealthsimple", "Interactive Brokers", "DRIP / Transfer Agent", "Other"])
     account = st.selectbox("Account Type", ["RRSP", "TFSA", "Non-Reg", "Crypto", "Direct Registered"])
-    
-    # UNLOCKED: Removed min_value to fully support negative entries
     new_shares = st.number_input("Total Shares / Cash Amount", step=0.000001, format="%.6f")
     submit_button = st.form_submit_button(label="Update Inventory")
 
@@ -144,7 +163,6 @@ if submit_button and ticker:
         df = pd.concat([df, new_row], ignore_index=True)
         st.sidebar.success(f"Added {ticker_clean}: {new_shares:.6f}.")
     
-    # UNLOCKED: Only delete rows if they are exactly 0, leaving negatives intact
     df = df[df['Shares'] != 0]
     df.to_csv(CSV_FILE, index=False)
     st.rerun()
@@ -155,34 +173,43 @@ df_inv = load_data()
 if not df_inv.empty:
     unique_tickers = list(df_inv["Ticker"].unique())
     
-    with st.spinner("🔄 Updating Live Market & FX Rates..."):
+    with st.spinner("🔄 Fetching Live Market & Dividend Data..."):
         market_data, usd_cad_rate = get_market_data(unique_tickers)
     
+    # Map gathered arrays into inventory dataframe
     df_inv["Raw Price"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"price": 0.0})["price"])
     df_inv["Currency"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"currency": "CAD"})["currency"])
+    df_inv["Annual Div per Share"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"annual_div": 0.0})["annual_div"])
     
-    # Calculate live conversion values safely
+    # Raw Currency Adjusted Calculations
     df_inv["Price (CAD)"] = df_inv.apply(
         lambda r: 1.00 if r["Raw Price"] == 0.0 
         else (r["Raw Price"] * usd_cad_rate if r["Currency"] == "USD" else r["Raw Price"]), axis=1
     )
     df_inv["Total Value (CAD)"] = df_inv["Shares"] * df_inv["Price (CAD)"]
-
-    # Main Metrics Containers
-    total_portfolio_value_cad = df_inv["Total Value (CAD)"].sum()
-    unique_assets = len(df_inv["Ticker"].unique())
     
-    col1, col2, col3 = st.columns(3)
+    # Dividend Earnings Conversion Rule (Converts USD dividends into true CAD payouts)
+    df_inv["Annual Income (CAD)"] = df_inv.apply(
+        lambda r: (r["Shares"] * r["Annual Div per Share"] * usd_cad_rate) if r["Currency"] == "USD"
+        else (r["Shares"] * r["Annual Div per Share"]), axis=1
+    )
+
+    # Master Top Grid Metrics (Expanded to 4 Columns)
+    total_portfolio_value_cad = df_inv["Total Value (CAD)"].sum()
+    total_annual_dividends_cad = df_inv["Annual Income (CAD)"].sum()
+    
+    col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Net Worth (CAD)", f"${total_portfolio_value_cad:,.2f}")
-    col2.metric("FX Rate (USD/CAD)", f"${usd_cad_rate:.4f}")
-    col3.metric("Total Asset Rows", len(df_inv))
+    col2.metric("Projected Annual Dividends", f"${total_annual_dividends_cad:,.2f}")
+    col3.metric("FX Rate (USD/CAD)", f"${usd_cad_rate:.4f}")
+    col4.metric("Total Asset Rows", len(df_inv))
 
     # --- 🏆 TOP 20 GLOBAL HOLDINGS CONSOLIDATOR ---
     st.markdown("### 🏆 Top 20 Consolidated Global Holdings")
     
     df_top = df_inv.groupby(["Ticker", "Currency", "Raw Price", "Price (CAD)"]).agg({
         "Shares": "sum",
-        "Total Value (CAD)" : "sum"
+        "Total Value (CAD)": "sum"
     }).reset_index()
     
     df_top["Portfolio Weight"] = (df_top["Total Value (CAD)"] / total_portfolio_value_cad) * 100
@@ -201,6 +228,30 @@ if not df_inv.empty:
         use_container_width=True,
         hide_index=True
     )
+
+    # --- 📅 NEW FEATURE: RECENT DIVIDEND HISTORY LOG ---
+    st.markdown("### 📅 Recent Dividend History (Last Distributions)")
+    
+    # Filter out cash/options overrides, grab entries with valid payouts
+    df_div_log = pd.DataFrame(unique_tickers, columns=["Ticker"])
+    df_div_log["Last Dividend Payout"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}) .get("last_div_amt", 0.0))
+    df_div_log["Currency"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("currency", "CAD"))
+    df_div_log["Payment Date"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("last_div_date", "N/A"))
+    
+    # Strip out rows that are purely non-dividend paying assets, crypto, or cash lines
+    df_div_log = df_div_log[df_div_log["Last Dividend Payout"] > 0]
+    
+    if not df_div_log.empty:
+        df_div_log["Distribution Amount"] = df_div_log.apply(lambda r: f"${r['Last Dividend Payout']:,.4f} {r['Currency']}", axis=1)
+        df_div_log = df_div_log.sort_values(by="Payment Date", ascending=False)
+        
+        st.dataframe(
+            df_div_log[["Ticker", "Distribution Amount", "Payment Date"]],
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("No active dividend histories detected among current portfolio ticker symbols.")
 
     # --- 5. DETAILED ACCOUNT BREAKDOWNS ---
     st.markdown("---")
