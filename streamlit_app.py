@@ -70,13 +70,19 @@ def get_market_data(tickers_list):
             price_dict[t] = {"price": 1.00, "currency": "USD" if t_upper.startswith("USD") else "CAD"}
             continue
             
-        # 2. Standard Equity Price Lookup
+        # 2. Standard Equity & Crypto Price Lookup
         try:
             ticker_data = yf.Ticker(t_upper)
             todays_data = ticker_data.history(period='5d')
             if not todays_data.empty:
                 live_price = todays_data['Close'].iloc[-1]
-                currency = "CAD" if (".TO" in t_upper or ".V" in t_upper) else "USD"
+                
+                # SMART CURRENCY CHECK: If it has .TO, .V, or ends in -CAD, it's native Canadian data
+                if (".TO" in t_upper) or (".V" in t_upper) or (t_upper.endswith("-CAD")):
+                    currency = "CAD"
+                else:
+                    currency = "USD"
+                    
                 price_dict[t] = {"price": live_price, "currency": currency}
             else:
                 price_dict[t] = {"price": 0.0, "currency": "CAD"}
@@ -115,7 +121,7 @@ if uploaded_file is not None:
         st.sidebar.error(f"Error: {e}")
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 Tip: Convert Canadian '.UN' REITs to '-UN.TO' (e.g., REI-UN.TO).")
+st.sidebar.info("💡 Tip: Convert Canadian '.UN' REITs to '-UN.TO' (e.g., REI-UN.TO). Use '-CAD' for direct crypto pairs.")
 
 with st.sidebar.form(key="update_form", clear_on_submit=True):
     ticker = st.text_input("Ticker Symbol").upper().strip()
@@ -153,7 +159,7 @@ if not df_inv.empty:
     df_inv["Raw Price"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"price": 0.0})["price"])
     df_inv["Currency"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"currency": "CAD"})["currency"])
     
-    # Safety Override calculation
+    # Calculate live conversion values safely
     df_inv["Price (CAD)"] = df_inv.apply(
         lambda r: 1.00 if r["Raw Price"] == 0.0 
         else (r["Raw Price"] * usd_cad_rate if r["Currency"] == "USD" else r["Raw Price"]), axis=1
@@ -169,27 +175,21 @@ if not df_inv.empty:
     col2.metric("FX Rate (USD/CAD)", f"${usd_cad_rate:.4f}")
     col3.metric("Total Asset Rows", len(df_inv))
 
-    # --- NEW FEATURE: 🏆 TOP 20 GLOBAL HOLDINGS CONSOLIDATOR ---
+    # --- 🏆 TOP 20 GLOBAL HOLDINGS CONSOLIDATOR ---
     st.markdown("### 🏆 Top 20 Consolidated Global Holdings")
     
-    # Merge duplicate tickers, sum up shares and total value across accounts
     df_top = df_inv.groupby(["Ticker", "Currency", "Raw Price", "Price (CAD)"]).agg({
         "Shares": "sum",
         "Total Value (CAD)": "sum"
     }).reset_index()
     
-    # Calculate global weight percentage for each combined ticker
     df_top["Portfolio Weight"] = (df_top["Total Value (CAD)"] / total_portfolio_value_cad) * 100
-    
-    # Sort from largest combined total value to smallest, and limit to top 20
     df_top = df_top.sort_values(by="Total Value (CAD)", ascending=False).head(20)
     
-    # Format layout strings cleanly for display
     df_top["Live Price"] = df_top.apply(
         lambda r: "Manual Override" if r["Raw Price"] == 0.0 else f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1
     )
     
-    # Render the consolidated view table
     st.dataframe(
         df_top[["Ticker", "Shares", "Live Price", "Total Value (CAD)", "Portfolio Weight"]].style.format({
             "Shares": "{:.6f}",
