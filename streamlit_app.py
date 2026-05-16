@@ -49,12 +49,12 @@ def load_data():
     if os.path.exists(CSV_FILE) and os.path.getsize(CSV_FILE) > 0:
         df = pd.read_csv(CSV_FILE)
         if not df.empty:
-            # Force cleanup directly when reading the file rows
             df["Ticker"] = df["Ticker"].astype(str).str.strip().str.upper()
             df["Shares"] = pd.to_numeric(df["Shares"], errors='coerce').fillna(0.0)
         return df
     return pd.DataFrame(columns=["Ticker", "Broker", "Account", "Shares"])
 
+# Native calculation engine that loops through actual cash distributions to avoid API drops
 @st.cache_data(ttl=60)
 def get_market_data(tickers_list):
     price_dict = {}
@@ -94,15 +94,21 @@ def get_market_data(tickers_list):
                 else:
                     price_dict[t_upper]["currency"] = "USD"
                 
+                # BULLETPROOF FIX: Use the exact same dataframe that populated your bottom table successfully!
                 div_series = ticker_data.dividends
                 if div_series is not None and not div_series.empty:
+                    # Log the latest single payout specs for your history feed
                     price_dict[t_upper]["last_div_amt"] = float(div_series.iloc[-1])
                     price_dict[t_upper]["last_div_date"] = div_series.index[-1].strftime('%Y-%m-%d')
                     
-                    recent_365d = div_series.last('365d')
-                    if not recent_365d.empty:
-                        price_dict[t_upper]["annual_div"] = float(recent_365d.sum())
-                    else:
+                    # Manually sum the actual distributions over the past year right here natively
+                    try:
+                        recent_365d = div_series.loc[div_series.index >= (pd.Timestamp.now() - pd.Timedelta(days=365))]
+                        if not recent_365d.empty:
+                            price_dict[t_upper]["annual_div"] = float(recent_365d.sum())
+                        else:
+                            price_dict[t_upper]["annual_div"] = float(div_series.iloc[-4:].sum())
+                    except Exception:
                         price_dict[t_upper]["annual_div"] = float(div_series.iloc[-4:].sum())
         except Exception:
             pass
@@ -168,14 +174,12 @@ if submit_button and ticker:
 df_inv = load_data()
 
 if not df_inv.empty:
-    # Ensure ticker names are pristine before querying Yahoo
     df_inv["Ticker"] = df_inv["Ticker"].astype(str).str.strip().str.upper()
     unique_tickers = list(df_inv["Ticker"].unique())
     
     with st.spinner("🔄 Fetching Live Market & Dividend Data..."):
         market_data, usd_cad_rate = get_market_data(unique_tickers)
     
-    # Force absolute matching logic rules when creating metrics
     df_inv["Raw Price"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"price": 0.0})["price"])
     df_inv["Currency"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"currency": "CAD"})["currency"])
     df_inv["Annual Div per Share"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"annual_div": 0.0})["annual_div"])
@@ -186,7 +190,7 @@ if not df_inv.empty:
     )
     df_inv["Total Value (CAD)"] = df_inv["Shares"] * df_inv["Price (CAD)"]
     
-    # Calculate actual dollar values across rows
+    # Run absolute numeric float multiplication
     df_inv["Annual Income (CAD)"] = df_inv.apply(
         lambda r: (float(r["Shares"]) * float(r["Annual Div per Share"]) * usd_cad_rate) if r["Currency"] == "USD"
         else (float(r["Shares"]) * float(r["Annual Div per Share"])), axis=1
@@ -200,15 +204,6 @@ if not df_inv.empty:
     col2.metric("Projected Annual Dividends", f"${total_annual_dividends_cad:,.2f}")
     col3.metric("FX Rate (USD/CAD)", f"${usd_cad_rate:.4f}")
     col4.metric("Total Asset Rows", len(df_inv))
-
-    # --- 🚨 DEBUGGING TOOL BLOCK: Lets us look into the calculation metrics directly ---
-    st.markdown("### 🛠️ Internal Dividend Calculation Debugger")
-    df_debug = df_inv.copy()
-    df_debug = df_debug[df_debug["Annual Div per Share"] > 0]
-    if not df_debug.empty:
-        st.dataframe(df_debug[["Ticker", "Shares", "Annual Div per Share", "Currency", "Annual Income (CAD)"]], use_container_width=True, hide_index=True)
-    else:
-        st.warning("Diagnostic note: The system is reading 'Annual Div per Share' as exactly 0.00 for all assets across the entire database framework.")
 
     # --- 🏆 TOP 20 GLOBAL HOLDINGS CONSOLIDATOR ---
     st.markdown("### 🏆 Top 20 Consolidated Global Holdings")
