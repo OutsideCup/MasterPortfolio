@@ -6,9 +6,19 @@ import yfinance as yf
 # --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="Portfolio Inventory")
 
+# Custom Neon Blue Styling + Header & Mobile Responsiveness
 st.markdown("""
     <style>
     .stApp { background-color: #050505; }
+    
+    /* Force Headers into Crisp Neon Blue */
+    h1, h2, h3, .main-header {
+        color: #00FFFF !important;
+        font-weight: 700 !important;
+        text-shadow: 0 0 5px rgba(0, 255, 255, 0.3);
+    }
+    
+    /* Neon Metric Styling */
     div[data-testid="stMetric"] {
         background-color: #000000;
         border: 2px solid #00FFFF;
@@ -18,6 +28,7 @@ st.markdown("""
     }
     label[data-testid="stMetricLabel"] { color: #BBBBBB !important; text-transform: uppercase; }
     div[data-testid="stMetricValue"] { color: #00FFFF !important; }
+    
     @media (max-width: 768px) {
         .block-container {
             padding-top: 1rem !important;
@@ -30,7 +41,8 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.write(f"### 🧊 TOTAL INVESTMENT PORTFOLIO (CAD GLOBAL VIEW)")
+# Main Title Header
+st.write("### 🧊 TOTAL INVESTMENT PORTFOLIO (CAD GLOBAL VIEW)")
 st.markdown("---")
 
 # --- 2. DATA HANDLING ---
@@ -42,7 +54,7 @@ def load_data():
     return pd.DataFrame(columns=["Ticker", "Broker", "Account", "Shares"])
 
 # Helper function to get live prices and handle currency/cash tracking
-@st.cache_data(ttl=60)  # Standard clean cache signature
+@st.cache_data(ttl=60)
 def get_market_data(tickers_list):
     price_dict = {}
     
@@ -62,7 +74,7 @@ def get_market_data(tickers_list):
             price_dict[t] = {"price": 1.00, "currency": "USD" if t_upper.startswith("USD") else "CAD"}
             continue
             
-        # 2. Standard Equity Price Lookup (5-day fallback for weekends)
+        # 2. Standard Equity Price Lookup
         try:
             ticker_data = yf.Ticker(t_upper)
             todays_data = ticker_data.history(period='5d')
@@ -118,8 +130,6 @@ with st.sidebar.form(key="update_form", clear_on_submit=True):
 
 if submit_button and ticker:
     df = load_data()
-    
-    # Strip spaces and force capitalization on write to prevent duplicates
     ticker_clean = ticker.upper().strip()
     mask = (df['Ticker'] == ticker_clean) & (df['Account'] == account) & (df['Broker'] == broker)
     
@@ -139,7 +149,6 @@ if submit_button and ticker:
 df_inv = load_data()
 
 if not df_inv.empty:
-    # CRITICAL FIX: Convert NumPy/Pandas series explicitly into a standard Python list
     unique_tickers = list(df_inv["Ticker"].unique())
     
     with st.spinner("🔄 Updating Live Market & FX Rates..."):
