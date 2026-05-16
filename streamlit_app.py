@@ -37,7 +37,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.write(f"### 🧊 TOTAL INVESTMENT PORTFOLIO")
+st.write(f"### 🧊 TOTAL INVESTMENT PORTFOLIO (CAD GLOBAL VIEW)")
 st.markdown("---")
 
 # --- 2. DATA HANDLING ---
@@ -48,23 +48,42 @@ def load_data():
         return pd.read_csv(CSV_FILE)
     return pd.DataFrame(columns=["Ticker", "Broker", "Account", "Shares"])
 
-# Helper function to get real-time price
-def get_live_prices(tickers):
+# Helper function to get live prices and handle currency/cash tracking
+@st.cache_data(ttl=300)  # Cache prices for 5 minutes to keep it snappy
+def get_market_data(tickers):
     price_dict = {}
+    
+    # Always fetch the live USD/CAD conversion rate first
+    try:
+        fx = yf.Ticker("USDCAD=X")
+        fx_data = fx.history(period='1d')
+        usd_cad_rate = fx_data['Close'].iloc[-1] if not fx_data.empty else 1.40
+    except Exception:
+        usd_cad_rate = 1.40 # Solid safety baseline if the feed hits a snag
+        
     for t in tickers:
+        t_upper = t.strip().upper()
+        
+        # 1. Smart Cash Check (Locks cash values so they do not fluctuate)
+        if t_upper == "TCSH" or "CASH" in t_upper:
+            price_dict[t] = {"price": 1.00, "currency": "USD" if t_upper.startswith("USD") else "CAD"}
+            continue
+            
+        # 2. Standard Equity Price Lookup
         try:
-            # Handle crypto or generic assets cleanly
-            ticker_clean = t.strip().upper()
-            ticker_data = yf.Ticker(ticker_clean)
-            # Fetch latest close price
+            ticker_data = yf.Ticker(t_upper)
             todays_data = ticker_data.history(period='1d')
             if not todays_data.empty:
-                price_dict[t] = todays_data['Close'].iloc[-1]
+                live_price = todays_data['Close'].iloc[-1]
+                # Determine currency based on ticker suffix
+                currency = "CAD" if (".TO" in t_upper or ".V" in t_upper) else "USD"
+                price_dict[t] = {"price": live_price, "currency": currency}
             else:
-                price_dict[t] = 0.0
+                price_dict[t] = {"price": 0.0, "currency": "CAD"}
         except Exception:
-            price_dict[t] = 0.0
-    return price_dict
+            price_dict[t] = {"price": 0.0, "currency": "CAD"}
+            
+    return price_dict, usd_cad_rate
 
 # --- 3. SIDEBAR: DATA CONTROLS & OVERRIDE FORM ---
 st.sidebar.header("🔄 Adjust Holdings")
@@ -97,17 +116,17 @@ if uploaded_file is not None:
         st.sidebar.error(f"Error: {e}")
 
 st.sidebar.markdown("---")
-st.sidebar.info("Enter a ticker and account to update the total share count.")
+st.sidebar.info("💡 For Cash: Use 'CADCASH' or 'TCSH' for Canadian cash, or 'USDCASH' for US cash balances.")
 
 with st.sidebar.form(key="update_form", clear_on_submit=True):
-    ticker = st.text_input("Ticker Symbol (e.g. XUS.TO, BTC-USD)").upper().strip()
+    ticker = st.text_input("Ticker Symbol (e.g. VEQT.TO, VT, CADCASH)").upper().strip()
     
     broker = st.selectbox("Brokerage / Location", 
                           ["TD Waterhouse", "Wealthsimple", "Interactive Brokers", "DRIP / Transfer Agent", "Other"])
     
     account = st.selectbox("Account Type", ["RRSP", "TFSA", "Non-Reg", "Crypto", "Direct Registered"])
     
-    new_shares = st.number_input("New Total Share Count", min_value=0.0, step=0.000001, format="%.6f")
+    new_shares = st.number_input("Total Shares / Cash Amount", min_value=0.0, step=0.000001, format="%.6f")
     
     submit_button = st.form_submit_button(label="Update Inventory")
 
@@ -117,65 +136,17 @@ if submit_button and ticker:
     
     if mask.any():
         df.loc[mask, 'Shares'] = new_shares
-        st.sidebar.success(f"Updated {ticker} to {new_shares:.6f} shares.")
+        st.sidebar.success(f"Updated {ticker} to {new_shares:.6f}.")
     else:
         new_row = pd.DataFrame([{"Ticker": ticker, "Broker": broker, "Account": account, "Shares": new_shares}])
         df = pd.concat([df, new_row], ignore_index=True)
-        st.sidebar.success(f"Added {ticker}: {new_shares:.6f} shares.")
+        st.sidebar.success(f"Added {ticker}: {new_shares:.6f}.")
     
     df = df[df['Shares'] > 0]
     df.to_csv(CSV_FILE, index=False)
     st.rerun()
 
-# --- 4. DISPLAY ENGINE & VALUE CALCULATOR ---
+# --- 4. DISPLAY ENGINE & MULTI-CURRENCY CALCULATOR ---
 df_inv = load_data()
 
-if not df_inv.empty:
-    # Fetch live prices for all distinct tickers in our portfolio
-    unique_tickers = df_inv["Ticker"].unique()
-    with st.spinner("🔄 Fetching Live Market Prices..."):
-        live_prices = get_live_prices(unique_tickers)
-    
-    # Map pricing and calculate values
-    df_inv["Price"] = df_inv["Ticker"].map(live_prices)
-    df_inv["Total Value"] = df_inv["Shares"] * df_inv["Price"]
-
-    # Main Metrics Rows
-    total_portfolio_value = df_inv["Total Value"].sum()
-    unique_assets = len(df_inv["Ticker"].unique())
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Portfolio Value", f"${total_portfolio_value:,.2f}")
-    col2.metric("Distinct Assets", unique_assets)
-    col3.metric("Locations Tracked", len(df_inv["Broker"].unique()))
-
-    st.markdown("### 📋 Current Valuation Inventory")
-    
-    df_display = df_inv.sort_values(by=["Broker", "Ticker"])
-    
-    # Render rich data table with price and total value calculations
-    st.dataframe(
-        df_display.style.format({
-            "Shares": "{:.6f}",
-            "Price": "${:,.2f}",
-            "Total Value": "${:,.2f}"
-        }), 
-        use_container_width=True, 
-        hide_index=True
-    )
-
-    # --- SUMMARY BUCKETS (Responsive Stack) ---
-    st.markdown("---")
-    c1, c2 = st.columns(2)
-    
-    with c1:
-        st.write("#### 📂 Valuation by Account")
-        acct_summary = df_inv.groupby("Account")["Total Value"].sum().reset_index()
-        st.dataframe(acct_summary.style.format({"Total Value": "${:,.2f}"}), use_container_width=True, hide_index=True)
-        
-    with c2:
-        st.write("#### 🏦 Valuation by Location")
-        broker_summary = df_inv.groupby("Broker")["Total Value"].sum().reset_index()
-        st.dataframe(broker_summary.style.format({"Total Value": "${:,.2f}"}), use_container_width=True, hide_index=True)
-else:
-    st.info("Your inventory is currently empty. Use the sidebar to log your first set of shares or upload a backup file.")
+if not df_
