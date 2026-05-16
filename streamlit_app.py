@@ -53,7 +53,7 @@ def load_data():
         return df
     return pd.DataFrame(columns=["Ticker", "Broker", "Account", "Shares"])
 
-# Re-engineered using standard fast_info metadata endpoints to avoid API blocking
+# Re-engineered data engine to prioritize direct cash distributions over variable yield math
 @st.cache_data(ttl=60)
 def get_market_data(tickers_list):
     price_dict = {}
@@ -68,7 +68,7 @@ def get_market_data(tickers_list):
     for t in tickers_list:
         t_upper = str(t).strip().upper()
         
-        # Absolute structural default fallback array
+        # Base fallback mapping setup
         price_dict[t_upper] = {
             "price": 0.0, 
             "currency": "CAD", 
@@ -85,7 +85,7 @@ def get_market_data(tickers_list):
         try:
             ticker_data = yf.Ticker(t_upper)
             
-            # 1. Capture pricing data using standard history window
+            # 1. Gather primary asset spot price
             todays_data = ticker_data.history(period='5d')
             if not todays_data.empty:
                 price_dict[t_upper]["price"] = todays_data['Close'].iloc[-1]
@@ -95,23 +95,20 @@ def get_market_data(tickers_list):
                 else:
                     price_dict[t_upper]["currency"] = "USD"
                 
-                # 2. BULLETPROOF FAST_INFO LOOKUP: Safely reads annual fields without authentication flags
-                fast_meta = ticker_data.fast_info
-                if fast_meta:
-                    div_yield_pct = fast_meta.get("dividend_yield", 0.0)
-                    # If a yield percentage exists, multiply by stock price to extract annual payout rate
-                    if div_yield_pct and div_yield_pct > 0:
-                        price_dict[t_upper]["annual_div"] = price_dict[t_upper]["price"] * div_yield_pct
-                
-                # 3. BACKUP RECENT LOG LOOKUP: Grabs the standalone latest single dividend value distribution specs
+                # 2. EXTRACT HISTORICAL DIVIDENDS DIRECTLY: Wipes out matching errors completely
                 div_series = ticker_data.dividends
                 if div_series is not None and not div_series.empty:
+                    # Snag standalone latest distribution rate for history block
                     price_dict[t_upper]["last_div_amt"] = float(div_series.iloc[-1])
                     price_dict[t_upper]["last_div_date"] = div_series.index[-1].strftime('%Y-%m-%d')
-                    # Double-check fallback for index funds that mask fast_info yields
-                    if price_dict[t_upper]["annual_div"] == 0.0:
-                        recent_1y = div_series.last('365d')
-                        price_dict[t_upper]["annual_div"] = recent_1y.sum() if not recent_1y.empty else 0.0
+                    
+                    # Compute rolling annual cash total per single share directly from ledger logs
+                    recent_365d = div_series.last('365d')
+                    if not recent_365d.empty:
+                        price_dict[t_upper]["annual_div"] = float(recent_365d.sum())
+                    else:
+                        # Fallback calculation matching style if rolling period boundary spans strangely
+                        price_dict[t_upper]["annual_div"] = float(div_series.iloc[-4:].sum())
         except Exception:
             pass
             
@@ -191,6 +188,7 @@ if not df_inv.empty:
     )
     df_inv["Total Value (CAD)"] = df_inv["Shares"] * df_inv["Price (CAD)"]
     
+    # Currency-aligned annual income aggregation engine
     df_inv["Annual Income (CAD)"] = df_inv.apply(
         lambda r: (r["Shares"] * r["Annual Div per Share"] * usd_cad_rate) if r["Currency"] == "USD"
         else (r["Shares"] * r["Annual Div per Share"]), axis=1
@@ -199,7 +197,6 @@ if not df_inv.empty:
     total_portfolio_value_cad = df_inv["Total Value (CAD)"].sum()
     total_annual_dividends_cad = df_inv["Annual Income (CAD)"].sum()
     
-    # TYPO REPAIRED COMPLETELY HERE
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Net Worth (CAD)", f"${total_portfolio_value_cad:,.2f}")
     col2.metric("Projected Annual Dividends", f"${total_annual_dividends_cad:,.2f}")
