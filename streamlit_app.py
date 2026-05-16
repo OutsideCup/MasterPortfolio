@@ -42,8 +42,8 @@ def load_data():
     return pd.DataFrame(columns=["Ticker", "Broker", "Account", "Shares"])
 
 # Helper function to get live prices and handle currency/cash tracking
-@st.cache_data(ttl=60)  # Dropped cache down to 1 minute for snappier tinkering updates
-def get_market_data(tickers):
+@st.cache_data(ttl=60)  # Standard clean cache signature
+def get_market_data(tickers_list):
     price_dict = {}
     
     # Always fetch the live USD/CAD conversion rate first
@@ -54,20 +54,20 @@ def get_market_data(tickers):
     except Exception:
         usd_cad_rate = 1.40
         
-    for t in tickers:
-        t_upper = t.strip().upper()
+    for t in tickers_list:
+        t_upper = str(t).strip().upper()
         
         # 1. Smart Cash Check
         if t_upper == "TCSH" or "CASH" in t_upper:
             price_dict[t] = {"price": 1.00, "currency": "USD" if t_upper.startswith("USD") else "CAD"}
             continue
             
-        # 2. Standard Equity Price Lookup (Checks 5 days back to safely handle weekends/holidays)
+        # 2. Standard Equity Price Lookup (5-day fallback for weekends)
         try:
             ticker_data = yf.Ticker(t_upper)
             todays_data = ticker_data.history(period='5d')
             if not todays_data.empty:
-                live_price = todays_data['Close'].iloc[-1]  # Pulls the most recent valid market close
+                live_price = todays_data['Close'].iloc[-1]
                 currency = "CAD" if (".TO" in t_upper or ".V" in t_upper) else "USD"
                 price_dict[t] = {"price": live_price, "currency": currency}
             else:
@@ -118,15 +118,18 @@ with st.sidebar.form(key="update_form", clear_on_submit=True):
 
 if submit_button and ticker:
     df = load_data()
-    mask = (df['Ticker'] == ticker) & (df['Account'] == account) & (df['Broker'] == broker)
+    
+    # Strip spaces and force capitalization on write to prevent duplicates
+    ticker_clean = ticker.upper().strip()
+    mask = (df['Ticker'] == ticker_clean) & (df['Account'] == account) & (df['Broker'] == broker)
     
     if mask.any():
         df.loc[mask, 'Shares'] = new_shares
-        st.sidebar.success(f"Updated {ticker} to {new_shares:.6f}.")
+        st.sidebar.success(f"Updated {ticker_clean} to {new_shares:.6f}.")
     else:
-        new_row = pd.DataFrame([{"Ticker": ticker, "Broker": broker, "Account": account, "Shares": new_shares}])
+        new_row = pd.DataFrame([{"Ticker": ticker_clean, "Broker": broker, "Account": account, "Shares": new_shares}])
         df = pd.concat([df, new_row], ignore_index=True)
-        st.sidebar.success(f"Added {ticker}: {new_shares:.6f}.")
+        st.sidebar.success(f"Added {ticker_clean}: {new_shares:.6f}.")
     
     df = df[df['Shares'] > 0]
     df.to_csv(CSV_FILE, index=False)
@@ -136,7 +139,9 @@ if submit_button and ticker:
 df_inv = load_data()
 
 if not df_inv.empty:
-    unique_tickers = df_inv["Ticker"].unique()
+    # CRITICAL FIX: Convert NumPy/Pandas series explicitly into a standard Python list
+    unique_tickers = list(df_inv["Ticker"].unique())
+    
     with st.spinner("🔄 Updating Live Market & FX Rates..."):
         market_data, usd_cad_rate = get_market_data(unique_tickers)
     
