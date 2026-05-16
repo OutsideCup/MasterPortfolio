@@ -11,7 +11,7 @@ st.markdown("""
     .stApp { background-color: #050505; }
     
     /* Force Headers into Crisp Neon Blue */
-    h1, h2, h3, .main-header {
+    h1, h2, h3, h4, .main-header {
         color: #00FFFF !important;
         font-weight: 700 !important;
         text-shadow: 0 0 5px rgba(0, 255, 255, 0.3);
@@ -70,7 +70,7 @@ def get_market_data(tickers_list):
             price_dict[t] = {"price": 1.00, "currency": "USD" if t_upper.startswith("USD") else "CAD"}
             continue
             
-        # 2. Standard Equity Price Lookup (5-day fallback for weekends)
+        # 2. Standard Equity Price Lookup
         try:
             ticker_data = yf.Ticker(t_upper)
             todays_data = ticker_data.history(period='5d')
@@ -153,14 +153,14 @@ if not df_inv.empty:
     df_inv["Raw Price"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"price": 0.0})["price"])
     df_inv["Currency"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"currency": "CAD"})["currency"])
     
-    # SAFETY OVERRIDE: If ticker is completely unrecognized and returns 0, treat its "shares" as a flat 1:1 CAD value
+    # Safety Override calculation
     df_inv["Price (CAD)"] = df_inv.apply(
         lambda r: 1.00 if r["Raw Price"] == 0.0 
         else (r["Raw Price"] * usd_cad_rate if r["Currency"] == "USD" else r["Raw Price"]), axis=1
     )
-    
     df_inv["Total Value (CAD)"] = df_inv["Shares"] * df_inv["Price (CAD)"]
 
+    # Main Metrics Containers
     total_portfolio_value_cad = df_inv["Total Value (CAD)"].sum()
     unique_assets = len(df_inv["Ticker"].unique())
     
@@ -169,13 +169,44 @@ if not df_inv.empty:
     col2.metric("FX Rate (USD/CAD)", f"${usd_cad_rate:.4f}")
     col3.metric("Total Asset Rows", len(df_inv))
 
-    st.markdown("### 📋 Current Valuation Inventory")
+    # --- NEW FEATURE: 🏆 TOP 20 GLOBAL HOLDINGS CONSOLIDATOR ---
+    st.markdown("### 🏆 Top 20 Consolidated Global Holdings")
+    
+    # Merge duplicate tickers, sum up shares and total value across accounts
+    df_top = df_inv.groupby(["Ticker", "Currency", "Raw Price", "Price (CAD)"]).agg({
+        "Shares": "sum",
+        "Total Value (CAD)": "sum"
+    }).reset_index()
+    
+    # Calculate global weight percentage for each combined ticker
+    df_top["Portfolio Weight"] = (df_top["Total Value (CAD)"] / total_portfolio_value_cad) * 100
+    
+    # Sort from largest combined total value to smallest, and limit to top 20
+    df_top = df_top.sort_values(by="Total Value (CAD)", ascending=False).head(20)
+    
+    # Format layout strings cleanly for display
+    df_top["Live Price"] = df_top.apply(
+        lambda r: "Manual Override" if r["Raw Price"] == 0.0 else f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1
+    )
+    
+    # Render the consolidated view table
+    st.dataframe(
+        df_top[["Ticker", "Shares", "Live Price", "Total Value (CAD)", "Portfolio Weight"]].style.format({
+            "Shares": "{:.6f}",
+            "Total Value (CAD)": "${:,.2f}",
+            "Portfolio Weight": "{:.2f}%"
+        }),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    # --- 5. DETAILED ACCOUNT BREAKDOWNS ---
+    st.markdown("---")
+    st.markdown("### 📋 Complete Location & Account Breakdown")
     
     df_display = df_inv.copy()
-    
-    # Formatted display text for unrecognized overrides
     df_display["Live Price"] = df_display.apply(
-        lambda r: "Manual (Flat $1)" if r["Raw Price"] == 0.0 else f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1
+        lambda r: "Manual Override" if r["Raw Price"] == 0.0 else f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1
     )
     df_display = df_display.sort_values(by=["Broker", "Ticker"])
     
@@ -188,6 +219,7 @@ if not df_inv.empty:
         hide_index=True
     )
 
+    # --- 6. SUMMARY BUCKETS ---
     st.markdown("---")
     c1, c2 = st.columns(2)
     
