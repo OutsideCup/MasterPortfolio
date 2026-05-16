@@ -148,5 +148,3 @@ if submit_button and ticker:
 
 # --- 4. DISPLAY ENGINE & MULTI-CURRENCY CALCULATOR ---
 df_inv = load_data()
-
-if not df_
