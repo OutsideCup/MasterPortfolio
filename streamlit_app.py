@@ -50,10 +50,12 @@ def load_data():
         df = pd.read_csv(CSV_FILE)
         if not df.empty:
             df["Ticker"] = df["Ticker"].astype(str).str.strip().str.upper()
+            # CORE FIX: Force Shares column to be true numeric decimals instantly
+            df["Shares"] = pd.to_numeric(df["Shares"], errors='coerce').fillna(0.0)
         return df
     return pd.DataFrame(columns=["Ticker", "Broker", "Account", "Shares"])
 
-# Re-engineered data engine to prioritize direct cash distributions over variable yield math
+# Data harvester using direct historical ledger distribution cycles
 @st.cache_data(ttl=60)
 def get_market_data(tickers_list):
     price_dict = {}
@@ -68,7 +70,6 @@ def get_market_data(tickers_list):
     for t in tickers_list:
         t_upper = str(t).strip().upper()
         
-        # Base fallback mapping setup
         price_dict[t_upper] = {
             "price": 0.0, 
             "currency": "CAD", 
@@ -84,9 +85,8 @@ def get_market_data(tickers_list):
             
         try:
             ticker_data = yf.Ticker(t_upper)
-            
-            # 1. Gather primary asset spot price
             todays_data = ticker_data.history(period='5d')
+            
             if not todays_data.empty:
                 price_dict[t_upper]["price"] = todays_data['Close'].iloc[-1]
                 
@@ -95,19 +95,15 @@ def get_market_data(tickers_list):
                 else:
                     price_dict[t_upper]["currency"] = "USD"
                 
-                # 2. EXTRACT HISTORICAL DIVIDENDS DIRECTLY: Wipes out matching errors completely
                 div_series = ticker_data.dividends
                 if div_series is not None and not div_series.empty:
-                    # Snag standalone latest distribution rate for history block
                     price_dict[t_upper]["last_div_amt"] = float(div_series.iloc[-1])
                     price_dict[t_upper]["last_div_date"] = div_series.index[-1].strftime('%Y-%m-%d')
                     
-                    # Compute rolling annual cash total per single share directly from ledger logs
                     recent_365d = div_series.last('365d')
                     if not recent_365d.empty:
                         price_dict[t_upper]["annual_div"] = float(recent_365d.sum())
                     else:
-                        # Fallback calculation matching style if rolling period boundary spans strangely
                         price_dict[t_upper]["annual_div"] = float(div_series.iloc[-4:].sum())
         except Exception:
             pass
@@ -188,7 +184,7 @@ if not df_inv.empty:
     )
     df_inv["Total Value (CAD)"] = df_inv["Shares"] * df_inv["Price (CAD)"]
     
-    # Currency-aligned annual income aggregation engine
+    # Mathematical aggregation engine
     df_inv["Annual Income (CAD)"] = df_inv.apply(
         lambda r: (r["Shares"] * r["Annual Div per Share"] * usd_cad_rate) if r["Currency"] == "USD"
         else (r["Shares"] * r["Annual Div per Share"]), axis=1
@@ -208,7 +204,7 @@ if not df_inv.empty:
     
     df_top = df_inv.groupby(["Ticker", "Currency", "Raw Price", "Price (CAD)"]).agg({
         "Shares": "sum",
-        "Total Value (CAD)": "sum"
+        "Total Value (CAD)" : "sum"
     }).reset_index()
     
     df_top["Portfolio Weight"] = (df_top["Total Value (CAD)"] / total_portfolio_value_cad) * 100
