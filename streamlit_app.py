@@ -3,8 +3,9 @@ import pandas as pd
 import os
 import yfinance as yf
 
-st.set_page_config(layout="wide")
-st.write("### 🧊 PORTFOLIO INCOME COCKPIT")
+# --- 1. SETUP & CONFIGURATION ---
+st.set_page_config(layout="wide", page_title="Portfolio Income Cockpit")
+st.write("### 🧊 TOTAL INVESTMENT PORTFOLIO (CAD GLOBAL VIEW)")
 st.markdown("---")
 
 CSV_FILE = "portfolio_inventory.csv"
@@ -18,6 +19,7 @@ def load_data():
         return df
     return pd.DataFrame(columns=["Ticker", "Broker", "Account", "Shares"])
 
+# Native calculation engine using actual cash distributions
 @st.cache_data(ttl=60)
 def get_market_data(tickers_list):
     price_dict = {}
@@ -29,7 +31,11 @@ def get_market_data(tickers_list):
         
     for t in tickers_list:
         t_up = str(t).strip().upper()
-        price_dict[t_up] = {"price": 0.0, "currency": "CAD", "annual_div": 0.0}
+        price_dict[t_up] = {
+            "price": 0.0, "currency": "CAD", 
+            "annual_div": 0.0, "last_div_amt": 0.0, 
+            "last_div_date": "N/A"
+        }
         
         if t_up in ["TCSH", "CASH", "OPTIONS", "CADCASH", "USDCASH"]:
             price_dict[t_up]["price"] = 1.00
@@ -48,6 +54,9 @@ def get_market_data(tickers_list):
                 
                 div_series = ticker_data.dividends
                 if div_series is not None and not div_series.empty:
+                    price_dict[t_up]["last_div_amt"] = float(div_series.iloc[-1])
+                    price_dict[t_up]["last_div_date"] = div_series.index[-1].strftime('%Y-%m-%d')
+                    
                     recent_365d = div_series.loc[div_series.index >= (pd.Timestamp.now() - pd.Timedelta(days=365))]
                     if not recent_365d.empty:
                         price_dict[t_up]["annual_div"] = float(recent_365d.sum())
@@ -57,10 +66,21 @@ def get_market_data(tickers_list):
             pass
     return price_dict, usd_cad_rate
 
-# --- SIDEBAR RESTORE ENGINE ---
-st.sidebar.header("🔄 Restore Data")
-uploaded_file = st.sidebar.file_uploader("📂 Upload Backup CSV", type=["csv"])
+# --- 2. SIDEBAR OPERATIONS & INPUT FORMS ---
+st.sidebar.header("🔄 Adjust Portfolio")
+df_current = load_data()
 
+if not df_current.empty:
+    csv_download = df_current.to_csv(index=False).encode('utf-8')
+    st.sidebar.download_button(
+        label="📥 Download Inventory CSV",
+        data=csv_download,
+        file_name="portfolio_inventory.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
+
+uploaded_file = st.sidebar.file_uploader("📂 Restore Backup CSV", type=["csv"])
 if uploaded_file is not None:
     try:
         restore_df = pd.read_csv(uploaded_file)
@@ -78,41 +98,106 @@ if uploaded_file is not None:
             fallback_df = restore_df.iloc[:, :4].copy()
             fallback_df.columns = ["Ticker", "Broker", "Account", "Shares"]
             fallback_df.to_csv(CSV_FILE, index=False)
-            st.sidebar.success("✅ Layout Restored Successfully!")
+            st.sidebar.success("✅ Layout Restored!")
             st.rerun()
     except Exception as e:
         st.sidebar.error(f"Error: {e}")
 
-# --- MAIN DISPLAY ENGINE ---
+st.sidebar.markdown("---")
+
+with st.sidebar.form(key="update_form", clear_on_submit=True):
+    ticker = st.text_input("Ticker Symbol").upper().strip()
+    broker = st.selectbox("Brokerage", ["TD Waterhouse", "Wealthsimple", "Interactive Brokers", "DRIP / Transfer Agent", "Other"])
+    account = st.selectbox("Account Type", ["RRSP", "TFSA", "Non-Reg", "Crypto", "Direct Registered"])
+    new_shares = st.number_input("Total Shares / Cash Amount", step=0.000001, format="%.6f")
+    submit_button = st.form_submit_button(label="Update Inventory")
+
+if submit_button and ticker:
+    df = load_data()
+    ticker_clean = ticker.upper().strip()
+    mask = (df['Ticker'] == ticker_clean) & (df['Account'] == account) & (df['Broker'] == broker)
+    
+    if mask.any():
+        df.loc[mask, 'Shares'] = new_shares
+    else:
+        new_row = pd.DataFrame([{"Ticker": ticker_clean, "Broker": broker, "Account": account, "Shares": new_shares}])
+        df = pd.concat([df, new_row], ignore_index=True)
+        
+    df = df[df['Shares'] != 0]
+    df.to_csv(CSV_FILE, index=False)
+    st.rerun()
+
+# --- 3. CORE CALCULATION LOOP ---
 df_inv = load_data()
 
 if not df_inv.empty:
     unique_tickers = list(df_inv["Ticker"].unique())
-    with st.spinner("🔄 Loading Market Data..."):
+    with st.spinner("🔄 Updating Market & Income Data..."):
         market_data, usd_cad_rate = get_market_data(unique_tickers)
     
     df_inv["Raw Price"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"price": 0.0})["price"])
     df_inv["Currency"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"currency": "CAD"})["currency"])
-    df_inv["Annual Div"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"annual_div": 0.0})["annual_div"])
+    df_inv["Annual Div per Share"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"annual_div": 0.0})["annual_div"])
     
-    df_inv["Price CAD"] = df_inv.apply(lambda r: 1.00 if r["Raw Price"] == 0.0 else (r["Raw Price"] * usd_cad_rate if r["Currency"] == "USD" else r["Raw Price"]), axis=1)
-    df_inv["Total Value CAD"] = df_inv["Shares"] * df_inv["Price CAD"]
+    df_inv["Price (CAD)"] = df_inv.apply(lambda r: 1.00 if r["Raw Price"] == 0.0 else (r["Raw Price"] * usd_cad_rate if r["Currency"] == "USD" else r["Raw Price"]), axis=1)
+    df_inv["Total Value (CAD)"] = df_inv["Shares"] * df_inv["Price (CAD)"]
     
-    df_inv["Income CAD"] = df_inv.apply(lambda r: (float(r["Shares"]) * float(r["Annual Div"]) * usd_cad_rate) if r["Currency"] == "USD" else (float(r["Shares"]) * float(r["Annual Div"])), axis=1)
+    df_inv["Annual Income (CAD)"] = df_inv.apply(lambda r: (float(r["Shares"]) * float(r["Annual Div per Share"]) * usd_cad_rate) if r["Currency"] == "USD" else (float(r["Shares"]) * float(r["Annual Div per Share"])), axis=1)
     
-    total_net_worth = df_inv["Total Value CAD"].sum()
-    total_dividends = df_inv["Income CAD"].sum()
+    total_net_worth = df_inv["Total Value (CAD)"].sum()
+    total_dividends = df_inv["Annual Income (CAD)"].sum()
     
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Total Net Worth (CAD)", f"${total_net_worth:,.2f}")
-    c2.metric("Projected Annual Dividends", f"${total_dividends:,.2f}")
-    c3.metric("USDCAD FX Rate", f"${usd_cad_rate:.4f}")
-    
+    # Master Top Grid Cards
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Net Worth (CAD)", f"${total_net_worth:,.2f}")
+    col2.metric("Projected Annual Dividends", f"${total_dividends:,.2f}")
+    col3.metric("FX Rate (USD/CAD)", f"${usd_cad_rate:.4f}")
+    col4.metric("Total Asset Rows", len(df_inv))
     st.markdown("---")
-    st.write("#### 🏆 Consolidated Portfolio Ledger")
+
+    # --- 🏆 TOP 20 GLOBAL HOLDINGS CONSOLIDATOR ---
+    st.markdown("### 🏆 Top 20 Consolidated Global Holdings")
+    df_top = df_inv.groupby(["Ticker", "Currency", "Raw Price", "Price (CAD)"]).agg({"Shares": "sum", "Total Value (CAD)": "sum"}).reset_index()
+    df_top["Portfolio Weight"] = (df_top["Total Value (CAD)"] / total_net_worth) * 100
+    df_top = df_top.sort_values(by="Total Value (CAD)", ascending=False).head(20)
+    df_top["Live Price"] = df_top.apply(lambda r: "Manual Override" if r["Raw Price"] == 0.0 else f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1)
     
+    st.dataframe(df_top[["Ticker", "Shares", "Live Price", "Total Value (CAD)", "Portfolio Weight"]].style.format({"Shares": "{:.6f}", "Total Value (CAD)": "${:,.2f}", "Portfolio Weight": "{:.2f}%"}), use_container_width=True, hide_index=True)
+
+    # --- 📅 RECENT DIVIDEND HISTORY LOG ---
+    st.markdown("### 📅 Recent Dividend History (Last Distributions)")
+    df_div_log = pd.DataFrame([t.upper().strip() for t in unique_tickers], columns=["Ticker"])
+    df_div_log["Last Payout"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("last_div_amt", 0.0))
+    df_div_log["Currency"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("currency", "CAD"))
+    df_div_log["Payment Date"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("last_div_date", "N/A"))
+    df_div_log = df_div_log[df_div_log["Last Payout"] > 0]
+    
+    if not df_div_log.empty:
+        df_div_log["Distribution Amount"] = df_div_log.apply(lambda r: f"${r['Last Payout']:,.4f} {r['Currency']}", axis=1)
+        df_div_log = df_div_log.sort_values(by="Payment Date", ascending=False)
+        st.dataframe(df_div_log[["Ticker", "Distribution Amount", "Payment Date"]], use_container_width=True, hide_index=True)
+    else:
+        st.info("No active dividend histories detected.")
+
+    # --- 📋 COMPLETE LOCATION & ACCOUNT BREAKDOWNS ---
+    st.markdown("---")
+    st.markdown("### 📋 Complete Location & Account Breakdown")
     df_display = df_inv.copy()
-    df_display = df_display.sort_values(by="Total Value CAD", ascending=False)
-    st.dataframe(df_display[["Ticker", "Broker", "Account", "Shares", "Total Value CAD", "Income CAD"]], use_container_width=True, hide_index=True)
+    df_display["Live Price"] = df_display.apply(lambda r: "Manual Override" if r["Raw Price"] == 0.0 else f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1)
+    df_display = df_display.sort_values(by=["Broker", "Ticker"])
+    
+    st.dataframe(df_display[["Ticker", "Broker", "Account", "Shares", "Live Price", "Total Value (CAD)"]].style.format({"Shares": "{:.6f}", "Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
+
+    # --- 📂 VALUATION SUMMARY BUCKETS ---
+    st.markdown("---")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write("#### 📂 Valuation by Account (CAD)")
+        acct_summary = df_inv.groupby("Account")["Total Value (CAD)"].sum().reset_index()
+        st.dataframe(acct_summary.style.format({"Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
+    with c2:
+        st.write("#### 🏦 Valuation by Location (CAD)")
+        broker_summary = df_inv.groupby("Broker")["Total Value (CAD)"].sum().reset_index()
+        st.dataframe(broker_summary.style.format({"Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
 else:
-    st.info("Your inventory database file is currently empty on this server branch. Upload your backup file to restore.")
+    st.info("Your inventory database file is currently empty. Upload your backup file to restore.")
