@@ -77,11 +77,18 @@ if not df_current.empty:
         use_container_width=True
     )
 
-uploaded_file = st.sidebar.file_uploader("📂 Restore Backup CSV", type=["csv"])
+uploaded_file = st.sidebar.file_uploader(
+    label="📂 Restore Backup CSV",
+    type=["csv"]
+)
+
 if uploaded_file is not None:
     try:
         restore_df = pd.read_csv(uploaded_file)
-        restore_df.columns = [str(col).strip().upper() for col in restore_df.columns]
+        restore_df.columns = [
+            str(col).strip().upper() 
+            for col in restore_df.columns
+        ]
         
         col_map = {
             "TICKER": "Ticker", 
@@ -89,7 +96,11 @@ if uploaded_file is not None:
             "ACCOUNT": "Account", 
             "SHARES": "Shares"
         }
-        found_cols = {orig: target for orig, target in col_map.items() if orig in restore_df.columns}
+        found_cols = {
+            orig: target 
+            for orig, target in col_map.items() 
+            if orig in restore_df.columns
+        }
         
         if len(found_cols) == 4:
             clean_df = restore_df[list(found_cols.keys())].copy()
@@ -99,13 +110,12 @@ if uploaded_file is not None:
             st.rerun()
         elif len(restore_df.columns) >= 4:
             fallback_df = restore_df.iloc[:, :4].copy()
-            # Absolute baseline list inputs preventing margin clipping bugs
-            f_cols = []
-            f_cols.append("Ticker")
-            f_cols.append("Broker")
-            f_cols.append("Account")
-            f_cols.append("Shares")
-            fallback_df.columns = f_cols
+            fallback_df.columns = [
+                "Ticker", 
+                "Broker", 
+                "Account", 
+                "Shares"
+            ]
             fallback_df.to_csv(CSV_FILE, index=False)
             st.sidebar.success("✅ Layout Restored!")
             st.rerun()
@@ -114,15 +124,31 @@ if uploaded_file is not None:
 
 st.sidebar.markdown("---")
 
-# --- 3. ROW EDITING CONTROLS ---
+# --- 3. ROW EDITING CONTROLS (ULTRA-NARROW LINES) ---
 st.sidebar.subheader("🔄 Adjust Individual Rows")
 with st.sidebar.form(key="update_form", clear_on_submit=True):
-    ticker = st.text_input(label="Ticker Symbol").upper().strip()
+    ticker = st.text_input(
+        label="Ticker Symbol"
+    ).upper().strip()
     
-    brk_opts = ["TD Waterhouse", "Wealthsimple", "Interactive Brokers", "DRIP / Transfer Agent", "Other"]
-    broker = st.selectbox(label="Brokerage", options=brk_opts)
+    brk_opts = [
+        "TD Waterhouse", 
+        "Wealthsimple", 
+        "Interactive Brokers", 
+        "DRIP / Transfer Agent", 
+        "Other"
+    ]
+    broker = st.selectbox(
+        label="Brokerage", 
+        options=brk_opts
+    )
     
-    acct_opts = ["RRSP", "TFSA", "Non-Reg", "Crypto", "Direct Registered"]
-    account = st.selectbox(label="Account Type", options=acct_opts)
-    
-    new_shares = st.number_input(label="Shares / Cash Amount", step=0
+    acct_opts = [
+        "RRSP", 
+        "TFSA", 
+        "Non-Reg", 
+        "Crypto", 
+        "Direct Registered"
+    ]
+    account = st.selectbox(
+        label="Account
