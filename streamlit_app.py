@@ -60,8 +60,8 @@ def get_market_data(tickers_list):
             pass
     return price_dict, usd_cad_rate
 
-# --- 2. SIDEBAR OPERATIONS ---
-st.sidebar.header("🔄 Adjust Portfolio")
+# --- 2. SIDEBAR MANDATORY UPLOAD SYSTEMS (STANDALONE ENGINE) ---
+st.sidebar.header("📥 Data Management")
 df_current = load_data()
 
 if not df_current.empty:
@@ -90,29 +90,4 @@ if uploaded_file is not None:
             st.rerun()
         elif len(restore_df.columns) >= 4:
             fallback_df = restore_df.iloc[:, :4].copy()
-            fallback_df.columns = ["Ticker", "Broker", "Account", "Shares"]
-            fallback_df.to_csv(CSV_FILE, index=False)
-            st.sidebar.success("✅ Layout Restored!")
-            st.rerun()
-    except Exception as e:
-        st.sidebar.error(f"Error: {e}")
-
-st.sidebar.markdown("---")
-
-# Vertically stacked forms to eliminate right-side truncation bugs entirely
-with st.sidebar.form(key="update_form", clear_on_submit=True):
-    ticker = st.text_input(
-        label="Ticker Symbol"
-    ).upper().strip()
-    
-    brk_opts = [
-        "TD Waterhouse", 
-        "Wealthsimple", 
-        "Interactive Brokers", 
-        "DRIP / Transfer Agent", 
-        "Other"
-    ]
-    broker = st.selectbox(
-        label="Brokerage", 
-        options=brk_opts
-    )
+            fallback_df.columns =
