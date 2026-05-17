@@ -79,7 +79,13 @@ if uploaded_file is not None:
     try:
         restore_df = pd.read_csv(uploaded_file)
         restore_df.columns = [str(col).strip().upper() for col in restore_df.columns]
-        col_map = {"TICKER": "Ticker", "BROKER": "Broker", "ACCOUNT": "Account", "SHARES": "Shares"}
+        
+        col_map = {
+            "TICKER": "Ticker", 
+            "BROKER": "Broker", 
+            "ACCOUNT": "Account", 
+            "SHARES": "Shares"
+        }
         found_cols = {orig: target for orig, target in col_map.items() if orig in restore_df.columns}
         
         if len(found_cols) == 4:
@@ -90,4 +96,28 @@ if uploaded_file is not None:
             st.rerun()
         elif len(restore_df.columns) >= 4:
             fallback_df = restore_df.iloc[:, :4].copy()
-            fallback_df.columns =
+            # Split list mapping vertically to completely safeguard line margins
+            fallback_df.columns = [
+                "Ticker", 
+                "Broker", 
+                "Account", 
+                "Shares"
+            ]
+            fallback_df.to_csv(CSV_FILE, index=False)
+            st.sidebar.success("✅ Layout Restored!")
+            st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"Error: {e}")
+
+st.sidebar.markdown("---")
+
+# --- 3. STANDALONE SINGLE-LINE UPDATE FORM ---
+st.sidebar.subheader("🔄 Adjust Individual Rows")
+with st.sidebar.form(key="update_form", clear_on_submit=True):
+    ticker = st.text_input(label="Ticker Symbol").upper().strip()
+    
+    brk_opts = ["TD Waterhouse", "Wealthsimple", "Interactive Brokers", "DRIP / Transfer Agent", "Other"]
+    broker = st.selectbox(label="Brokerage", options=brk_opts)
+    
+    acct_opts = ["RRSP", "TFSA", "Non-Reg", "Crypto", "Direct Registered"]
+    account = st.selectbox(label="Account Type", options=acct_opts)
