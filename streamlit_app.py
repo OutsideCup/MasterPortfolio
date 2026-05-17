@@ -54,7 +54,7 @@ def load_data():
         return df
     return pd.DataFrame(columns=["Ticker", "Broker", "Account", "Shares"])
 
-# Native calculation engine that loops through actual cash distributions to avoid API drops
+# Native calculation engine using actual cash distributions
 @st.cache_data(ttl=60)
 def get_market_data(tickers_list):
     price_dict = {}
@@ -94,14 +94,11 @@ def get_market_data(tickers_list):
                 else:
                     price_dict[t_upper]["currency"] = "USD"
                 
-                # BULLETPROOF FIX: Use the exact same dataframe that populated your bottom table successfully!
                 div_series = ticker_data.dividends
                 if div_series is not None and not div_series.empty:
-                    # Log the latest single payout specs for your history feed
                     price_dict[t_upper]["last_div_amt"] = float(div_series.iloc[-1])
                     price_dict[t_upper]["last_div_date"] = div_series.index[-1].strftime('%Y-%m-%d')
                     
-                    # Manually sum the actual distributions over the past year right here natively
                     try:
                         recent_365d = div_series.loc[div_series.index >= (pd.Timestamp.now() - pd.Timedelta(days=365))]
                         if not recent_365d.empty:
@@ -135,14 +132,25 @@ uploaded_file = st.sidebar.file_uploader("📂 Restore Backup from PC", type=["c
 if uploaded_file is not None:
     try:
         restore_df = pd.read_csv(uploaded_file)
-        if list(restore_df.columns) == ["Ticker", "Broker", "Account", "Shares"]:
-            restore_df.to_csv(CSV_FILE, index=False)
+        
+        # FAULT-TOLERANT FIX: Force all column headers to uppercase text and strip extra spaces
+        restore_df.columns = [str(col).strip().upper() for col in restore_df.columns]
+        
+        # Check if the core required columns are present anywhere inside the file
+        required_cols = ["TICKER", "BROKER", "ACCOUNT", "SHARES"]
+        if all(col in restore_df.columns for col in required_cols):
+            # Isolate just the required rows, map them back into proper case names
+            clean_df = restore_df[required_cols].copy()
+            clean_df.columns = ["Ticker", "Broker", "Account", "Shares"]
+            
+            # Save the clean database file to the server
+            clean_df.to_csv(CSV_FILE, index=False)
             st.sidebar.success("✅ Inventory Restored Successfully!")
             st.rerun()
         else:
-            st.sidebar.error("❌ Invalid file format.")
+            st.sidebar.error("❌ Invalid format. File must contain Ticker, Broker, Account, and Shares columns.")
     except Exception as e:
-        st.sidebar.error(f"Error: {e}")
+        st.sidebar.error(f"Error reading file: {e}")
 
 st.sidebar.markdown("---")
 
@@ -190,7 +198,6 @@ if not df_inv.empty:
     )
     df_inv["Total Value (CAD)"] = df_inv["Shares"] * df_inv["Price (CAD)"]
     
-    # Run absolute numeric float multiplication
     df_inv["Annual Income (CAD)"] = df_inv.apply(
         lambda r: (float(r["Shares"]) * float(r["Annual Div per Share"]) * usd_cad_rate) if r["Currency"] == "USD"
         else (float(r["Shares"]) * float(r["Annual Div per Share"])), axis=1
@@ -265,24 +272,4 @@ if not df_inv.empty:
     st.dataframe(
         df_display[[ "Ticker", "Broker", "Account", "Shares", "Live Price", "Total Value (CAD)" ]].style.format({
             "Shares": "{:.6f}",
-            "Total Value (CAD)": "${:,.2f}"
-        }), 
-        use_container_width=True, 
-        hide_index=True
-    )
-
-    # --- 6. SUMMARY BUCKETS ---
-    st.markdown("---")
-    c1, c2 = st.columns(2)
-    
-    with c1:
-        st.write("#### 📂 Valuation by Account (CAD)")
-        acct_summary = df_inv.groupby("Account")["Total Value (CAD)"].sum().reset_index()
-        st.dataframe(acct_summary.style.format({"Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
-        
-    with c2:
-        st.write("#### 🏦 Valuation by Location (CAD)")
-        broker_summary = df_inv.groupby("Broker")["Total Value (CAD)"].sum().reset_index()
-        st.dataframe(broker_summary.style.format({"Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
-else:
-    st.info("Your inventory is currently empty. Use the sidebar to log your first set of shares or upload a backup file.")
+            "Total Value (CAD)
