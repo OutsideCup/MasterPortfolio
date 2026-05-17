@@ -77,7 +77,7 @@ def get_market_data(tickers_list):
             "last_div_date": "N/A"
         }
         
-        if t_upper == "TCSH" or "CASH" in t_upper or t_upper == "OPTIONS" or t_upper == "CADCASH" or t_upper == "USDCASH":
+        if t_upper in ["TCSH", "CASH", "OPTIONS", "CADCASH", "USDCASH"]:
             price_dict[t_upper]["price"] = 1.00
             price_dict[t_upper]["currency"] = "USD" if t_upper.startswith("USD") else "CAD"
             continue
@@ -133,10 +133,9 @@ if uploaded_file is not None:
     try:
         restore_df = pd.read_csv(uploaded_file)
         
-        # Format headers safely
+        # Format headers safely to avoid structural layout crashes
         restore_df.columns = [str(col).strip().upper() for col in restore_df.columns]
         
-        # Flexible restore check logic map
         col_map = {
             "TICKER": "Ticker",
             "BROKER": "Broker",
@@ -144,7 +143,7 @@ if uploaded_file is not None:
             "SHARES": "Shares"
         }
         
-        # Rename valid headers that match anywhere in your uploaded spreadsheet layout
+        # Rename layout matches dynamically
         found_cols = {orig: target for orig, target in col_map.items() if orig in restore_df.columns}
         
         if len(found_cols) == 4:
@@ -154,7 +153,7 @@ if uploaded_file is not None:
             st.sidebar.success("✅ Inventory Restored Successfully!")
             st.rerun()
         else:
-            # Absolute baseline direct structure fallback loader if columns are missing labels
+            # Baseline index loader fallback if row columns lost their header text
             if len(restore_df.columns) >= 4:
                 fallback_df = restore_df.iloc[:, :4].copy()
                 fallback_df.columns = ["Ticker", "Broker", "Account", "Shares"]
@@ -235,4 +234,28 @@ if not df_inv.empty:
     }).reset_index()
     
     df_top["Portfolio Weight"] = (df_top["Total Value (CAD)"] / total_portfolio_value_cad) * 100
-    df_top = df_top.sort_values(by="Total Value
+    df_top = df_top.sort_values(by="Total Value (CAD)", ascending=False).head(20)
+    
+    df_top["Live Price"] = df_top.apply(
+        lambda r: "Manual Override" if r["Raw Price"] == 0.0 else f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1
+    )
+    
+    st.dataframe(
+        df_top[["Ticker", "Shares", "Live Price", "Total Value (CAD)", "Portfolio Weight"]].style.format({
+            "Shares": "{:.6f}",
+            "Total Value (CAD)": "${:,.2f}",
+            "Portfolio Weight": "{:.2f}%"
+        }),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    # --- 📅 RECENT DIVIDEND HISTORY LOG ---
+    st.markdown("### 📅 Recent Dividend History (Last Distributions)")
+    
+    df_div_log = pd.DataFrame([t.upper().strip() for t in unique_tickers], columns=["Ticker"])
+    df_div_log["Last Dividend Payout"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("last_div_amt", 0.0))
+    df_div_log["Currency"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("currency", "CAD"))
+    df_div_log["Payment Date"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("last_div_date", "N/A"))
+    
+    df_div_log = df_div_log[df_div_log["Last Dividend Payout"] >
