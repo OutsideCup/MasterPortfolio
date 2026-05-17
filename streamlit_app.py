@@ -19,7 +19,7 @@ def load_data():
         return df
     return pd.DataFrame(columns=["Ticker", "Broker", "Account", "Shares"])
 
-# Weekend-safe institutional data harvester targeting core info profiles
+# Weekend-proof data harvester that reads straight from the dividend timeline arrays
 @st.cache_data(ttl=60)
 def get_market_data(tickers_list):
     price_dict = {}
@@ -52,29 +52,18 @@ def get_market_data(tickers_list):
                 else:
                     price_dict[t_up]["currency"] = "USD"
                 
-                # Weekend-Proof Fallback: Read core institutional data profile flags directly
-                info = ticker_data.info
-                if info:
-                    # Capture historical single payouts safely
-                    last_amt = info.get("lastDividendValue") or info.get("lastDividendedValue") or 0.0
-                    price_dict[t_up]["last_div_amt"] = float(last_amt)
+                # Safe native lookup: reads the dividend timeline data frames directly
+                div_series = ticker_data.dividends
+                if div_series is not None and not div_series.empty:
+                    price_dict[t_up]["last_div_amt"] = float(div_series.iloc[-1])
+                    price_dict[t_up]["last_div_date"] = div_series.index[-1].strftime('%Y-%m-%d')
                     
-                    last_date_epoch = info.get("lastDividendDate")
-                    if last_date_epoch:
-                        price_dict[t_up]["last_div_date"] = pd.to_datetime(last_date_epoch, unit='s').strftime('%Y-%m-%d')
-                    
-                    # Capture trailing annual cumulative dollar distributions explicitly
-                    ann_rate = info.get("trailingAnnualDividendRate") or info.get("dividendRate") or 0.0
-                    price_dict[t_up]["annual_div"] = float(ann_rate)
-                    
-                # Secondary Backup Checklist: If profile returns blank, calculate from dividend matrix
-                if price_dict[t_up]["annual_div"] == 0.0:
-                    div_series = ticker_data.dividends
-                    if div_series is not None and not div_series.empty:
-                        price_dict[t_up]["last_div_amt"] = float(div_series.iloc[-1])
-                        price_dict[t_up]["last_div_date"] = div_series.index[-1].strftime('%Y-%m-%d')
-                        recent_365d = div_series.loc[div_series.index >= (pd.Timestamp.now() - pd.Timedelta(days=365))]
-                        price_dict[t_up]["annual_div"] = float(recent_365d.sum()) if not recent_365d.empty else float(div_series.iloc[-4:].sum())
+                    # Manually sum up the trailing 12 months of distributions right here
+                    recent_365d = div_series.loc[div_series.index >= (pd.Timestamp.now() - pd.Timedelta(days=365))]
+                    if not recent_365d.empty:
+                        price_dict[t_up]["annual_div"] = float(recent_365d.sum())
+                    else:
+                        price_dict[t_up]["annual_div"] = float(div_series.iloc[-4:].sum())
         except Exception:
             pass
     return price_dict, usd_cad_rate
@@ -177,7 +166,7 @@ if not df_inv.empty:
     
     st.dataframe(df_top[["Ticker", "Shares", "Live Price", "Total Value (CAD)", "Portfolio Weight"]].style.format({"Shares": "{:.6f}", "Total Value (CAD)": "${:,.2f}", "Portfolio Weight": "{:.2f}%"}), use_container_width=True, hide_index=True)
 
-    # --- 📅 RECENT DIVIDEND HISTORY LOG (UPDATED WITH PAYOUT TOTALS) ---
+    # --- 📅 RECENT DIVIDEND HISTORY LOG WITH CASH PAYOUT TOTALS ---
     st.markdown("### 📅 Recent Dividend History (Last Distributions)")
     df_div_log = pd.DataFrame([t.upper().strip() for t in unique_tickers], columns=["Ticker"])
     df_div_log["Last Payout"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("last_div_amt", 0.0))
@@ -186,18 +175,41 @@ if not df_inv.empty:
     df_div_log = df_div_log[df_div_log["Last Payout"] > 0]
     
     if not df_div_log.empty:
-        # Calculate consolidated shares held for each paying asset symbol
+        # Sum up total share balances held across different accounts for this asset
         shares_map = df_inv.groupby("Ticker")["Shares"].sum().to_dict()
         df_div_log["Total Shares Held"] = df_div_log["Ticker"].map(shares_map)
         
-        # Multiply standalone payout amount across your total portfolio share allocations
+        # Core Math: Multiply your actual share count by the single distribution amount
         df_div_log["Estimated Payout"] = df_div_log["Last Payout"] * df_div_log["Total Shares Held"]
         
-        # Apply clean notation styling rules to ledger outputs
+        # Display layout configurations
         df_div_log["Distribution Amount"] = df_div_log.apply(lambda r: f"${r['Last Payout']:,.4f} {r['Currency']}", axis=1)
-        df_div_log["Total Received"] = df_div_log.apply(lambda r: f"${r['Estimated Payout']:,.2f} {r['Currency']}", axis=1)
+        df_div_log["Total Cash Received"] = df_div_log.apply(lambda r: f"${r['Estimated Payout']:,.2f} {r['Currency']}", axis=1)
         df_div_log = df_div_log.sort_values(by="Payment Date", ascending=False)
         
-        st.dataframe(df_div_log[["Ticker", "Distribution Amount", "Total Shares Held", "Total Received", "Payment Date"]].style.format({"Total Shares Held": "{:,.2f}"}), use_container_width=True, hide_index=True)
+        st.dataframe(df_div_log[["Ticker", "Distribution Amount", "Total Shares Held", "Total Cash Received", "Payment Date"]].style.format({"Total Shares Held": "{:,.2f}"}), use_container_width=True, hide_index=True)
     else:
         st.info("No active dividend histories detected.")
+
+    # --- 📋 COMPLETE LOCATION & ACCOUNT BREAKDOWNS ---
+    st.markdown("---")
+    st.markdown("### 📋 Complete Location & Account Breakdown")
+    df_display = df_inv.copy()
+    df_display["Live Price"] = df_display.apply(lambda r: "Manual Override" if r["Raw Price"] == 0.0 else f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1)
+    df_display = df_display.sort_values(by=["Broker", "Ticker"])
+    
+    st.dataframe(df_display[["Ticker", "Broker", "Account", "Shares", "Live Price", "Total Value (CAD)"]].style.format({"Shares": "{:.6f}", "Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
+
+    # --- 📂 VALUATION SUMMARY BUCKETS ---
+    st.markdown("---")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write("#### 📂 Valuation by Account (CAD)")
+        acct_summary = df_inv.groupby("Account")["Total Value (CAD)"].sum().reset_index()
+        st.dataframe(acct_summary.style.format({"Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
+    with c2:
+        st.write("#### 🏦 Valuation by Location (CAD)")
+        broker_summary = df_inv.groupby("Broker")["Total Value (CAD)"].sum().reset_index()
+        st.dataframe(broker_summary.style.format({"Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
+else:
+    st.info("Your inventory database file is currently empty. Upload your backup file to restore.")
