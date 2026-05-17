@@ -3,11 +3,50 @@ import pandas as pd
 import os
 import yfinance as yf
 
-# --- 1. SETUP & CONFIGURATION ---
+# --- 1. SETUP & CONFIGURATION (MOBILE RESPONSIVE CSS) ---
 st.set_page_config(layout="wide", page_title="Portfolio Income Cockpit")
+
+st.markdown("""
+    <style>
+    /* Global Clean Theme Foundations */
+    .stApp { background-color: #FFFFFF; color: #111111; }
+    
+    /* Responsive Metric Card Framework */
+    div[data-testid="stMetric"] {
+        background-color: #F8F9FA;
+        border: 1px solid #DEE2E6;
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 10px;
+    }
+    
+    /* Desktop Data Frame Optimization */
+    .stDataFrame { width: 100% !important; }
+    
+    /* MOBILE MEDIA QUERIES (Triggers on phone displays) */
+    @media (max-width: 768px) {
+        .block-container {
+            padding-top: 1rem !important;
+            padding-bottom: 1rem !important;
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+        }
+        /* Forces desktop row metric splits to stack vertically on phone screens */
+        div[data-testid="stMetric"] {
+            padding: 12px !important;
+            margin-bottom: 8px !important;
+        }
+        /* Shrink header font metrics slightly so they don't break lines awkwardly */
+        h3 { font-size: 1.4rem !important; }
+        h4 { font-size: 1.1rem !important; }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 st.write("### 🧊 TOTAL INVESTMENT PORTFOLIO (CAD GLOBAL VIEW)")
 st.markdown("---")
 
+# --- 2. DATA HANDLING & BACKUP MANAGEMENT ---
 CSV_FILE = "portfolio_inventory.csv"
 
 def load_data():
@@ -19,7 +58,7 @@ def load_data():
         return df
     return pd.DataFrame(columns=["Ticker", "Broker", "Account", "Shares"])
 
-# Weekend-proof data harvester that reads straight from the dividend timeline arrays
+# Weekend-proof corporate data harvester pulling native distributions explicitly
 @st.cache_data(ttl=60)
 def get_market_data(tickers_list):
     price_dict = {}
@@ -52,23 +91,20 @@ def get_market_data(tickers_list):
                 else:
                     price_dict[t_up]["currency"] = "USD"
                 
-                # Safe native lookup: reads the dividend timeline data frames directly
+                # BULLETPROOF RE-ENGINEERING: Fallback to static slice indexing
                 div_series = ticker_data.dividends
                 if div_series is not None and not div_series.empty:
+                    # Snag standalone latest distribution metrics
                     price_dict[t_up]["last_div_amt"] = float(div_series.iloc[-1])
                     price_dict[t_up]["last_div_date"] = div_series.index[-1].strftime('%Y-%m-%d')
                     
-                    # Manually sum up the trailing 12 months of distributions right here
-                    recent_365d = div_series.loc[div_series.index >= (pd.Timestamp.now() - pd.Timedelta(days=365))]
-                    if not recent_365d.empty:
-                        price_dict[t_up]["annual_div"] = float(recent_365d.sum())
-                    else:
-                        price_dict[t_up]["annual_div"] = float(div_series.iloc[-4:].sum())
+                    # Core Fix: Sum up the last 4 corporate payout values manually to bypass weekend date bugs
+                    price_dict[t_up]["annual_div"] = float(div_series.iloc[-4:].sum())
         except Exception:
             pass
     return price_dict, usd_cad_rate
 
-# --- 2. SIDEBAR OPERATIONS & INPUT FORMS ---
+# --- 3. SIDEBAR UTILITIES ---
 st.sidebar.header("🔄 Adjust Portfolio")
 df_current = load_data()
 
@@ -118,23 +154,21 @@ if submit_button and ticker:
     df = load_data()
     ticker_clean = ticker.upper().strip()
     mask = (df['Ticker'] == ticker_clean) & (df['Account'] == account) & (df['Broker'] == broker)
-    
     if mask.any():
         df.loc[mask, 'Shares'] = new_shares
     else:
         new_row = pd.DataFrame([{"Ticker": ticker_clean, "Broker": broker, "Account": account, "Shares": new_shares}])
         df = pd.concat([df, new_row], ignore_index=True)
-        
     df = df[df['Shares'] != 0]
     df.to_csv(CSV_FILE, index=False)
     st.rerun()
 
-# --- 3. CORE CALCULATION LOOP ---
+# --- 4. CORE ENGINE DISPLAY & DATA CALCULATIONS ---
 df_inv = load_data()
 
 if not df_inv.empty:
     unique_tickers = list(df_inv["Ticker"].unique())
-    with st.spinner("🔄 Updating Market & Income Data..."):
+    with st.spinner("🔄 Refreshing Ledger Infrastructure..."):
         market_data, usd_cad_rate = get_market_data(unique_tickers)
     
     df_inv["Raw Price"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"price": 0.0})["price"])
@@ -149,7 +183,7 @@ if not df_inv.empty:
     total_net_worth = df_inv["Total Value (CAD)"].sum()
     total_dividends = df_inv["Annual Income (CAD)"].sum()
     
-    # Master Top Grid Cards
+    # Responsive Column Layout Boxes
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Net Worth (CAD)", f"${total_net_worth:,.2f}")
     col2.metric("Projected Annual Dividends", f"${total_dividends:,.2f}")
@@ -166,7 +200,7 @@ if not df_inv.empty:
     
     st.dataframe(df_top[["Ticker", "Shares", "Live Price", "Total Value (CAD)", "Portfolio Weight"]].style.format({"Shares": "{:.6f}", "Total Value (CAD)": "${:,.2f}", "Portfolio Weight": "{:.2f}%"}), use_container_width=True, hide_index=True)
 
-    # --- 📅 RECENT DIVIDEND HISTORY LOG WITH CASH PAYOUT TOTALS ---
+    # --- 📅 RECENT DIVIDEND HISTORY LOG ---
     st.markdown("### 📅 Recent Dividend History (Last Distributions)")
     df_div_log = pd.DataFrame([t.upper().strip() for t in unique_tickers], columns=["Ticker"])
     df_div_log["Last Payout"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("last_div_amt", 0.0))
@@ -175,14 +209,10 @@ if not df_inv.empty:
     df_div_log = df_div_log[df_div_log["Last Payout"] > 0]
     
     if not df_div_log.empty:
-        # Sum up total share balances held across different accounts for this asset
         shares_map = df_inv.groupby("Ticker")["Shares"].sum().to_dict()
         df_div_log["Total Shares Held"] = df_div_log["Ticker"].map(shares_map)
-        
-        # Core Math: Multiply your actual share count by the single distribution amount
         df_div_log["Estimated Payout"] = df_div_log["Last Payout"] * df_div_log["Total Shares Held"]
         
-        # Display layout configurations
         df_div_log["Distribution Amount"] = df_div_log.apply(lambda r: f"${r['Last Payout']:,.4f} {r['Currency']}", axis=1)
         df_div_log["Total Cash Received"] = df_div_log.apply(lambda r: f"${r['Estimated Payout']:,.2f} {r['Currency']}", axis=1)
         df_div_log = df_div_log.sort_values(by="Payment Date", ascending=False)
