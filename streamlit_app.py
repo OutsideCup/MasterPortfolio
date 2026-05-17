@@ -99,9 +99,11 @@ if uploaded_file is not None:
 
 st.sidebar.markdown("---")
 
-# Split arrays into ultra-short stacked lines to prevent editor cropping
+# Vertically stacked forms to eliminate right-side truncation bugs entirely
 with st.sidebar.form(key="update_form", clear_on_submit=True):
-    ticker = st.text_input("Ticker Symbol").upper().strip()
+    ticker = st.text_input(
+        label="Ticker Symbol"
+    ).upper().strip()
     
     brk_opts = [
         "TD Waterhouse", 
@@ -110,15 +112,7 @@ with st.sidebar.form(key="update_form", clear_on_submit=True):
         "DRIP / Transfer Agent", 
         "Other"
     ]
-    broker = st.selectbox("Brokerage", brk_opts)
-    
-    acct_opts = [
-        "RRSP", 
-        "TFSA", 
-        "Non-Reg", 
-        "Crypto", 
-        "Direct Registered"
-    ]
-    account = st.selectbox("Account Type", acct_opts)
-    
-    new_shares = st.number_
+    broker = st.selectbox(
+        label="Brokerage", 
+        options=brk_opts
+    )
