@@ -3,42 +3,52 @@ import pandas as pd
 import os
 import yfinance as yf
 
-# --- 1. SETUP & CONFIGURATION (MOBILE RESPONSIVE CSS) ---
+# --- 1. SETUP & THEME CONFIGURATION (ADVANCED MOBILE CSS) ---
 st.set_page_config(layout="wide", page_title="Portfolio Income Cockpit")
 
 st.markdown("""
     <style>
-    /* Global Clean Theme Foundations */
-    .stApp { background-color: #FFFFFF; color: #111111; }
-    
-    /* Responsive Metric Card Framework */
-    div[data-testid="stMetric"] {
-        background-color: #F8F9FA;
-        border: 1px solid #DEE2E6;
-        border-radius: 8px;
-        padding: 15px;
-        margin-bottom: 10px;
+    /* Force responsive fluid containers for small screens */
+    .block-container {
+        padding-top: 1.5rem !important;
+        padding-bottom: 1.5rem !important;
+        padding-left: 0.75rem !important;
+        padding-right: 0.75rem !important;
     }
     
-    /* Desktop Data Frame Optimization */
-    .stDataFrame { width: 100% !important; }
+    /* UNIVERSAL METRIC CARD FIX: Forces explicit high-contrast visibility */
+    div[data-testid="stMetric"] {
+        background-color: rgba(128, 128, 128, 0.08) !important;
+        border: 1px solid rgba(128, 128, 128, 0.2) !important;
+        border-radius: 10px !important;
+        padding: 16px !important;
+        margin-bottom: 12px !important;
+    }
     
-    /* MOBILE MEDIA QUERIES (Triggers on phone displays) */
+    /* Ensure metric labels and numbers auto-adjust contrast dynamically */
+    div[data-testid="stMetricLabel"] > div {
+        color: inherit !important;
+        opacity: 0.8 !important;
+        font-size: 0.85rem !important;
+        text-transform: uppercase !important;
+        font-weight: 600 !important;
+    }
+    div[data-testid="stMetricValue"] > div {
+        color: inherit !important;
+        font-size: 1.75rem !important;
+        font-weight: 700 !important;
+    }
+    
+    /* Fix mobile table wrapping and squishing */
+    .stDataFrame div {
+        font-size: 0.9rem !important;
+    }
+    
+    /* Mobile font scaler */
     @media (max-width: 768px) {
-        .block-container {
-            padding-top: 1rem !important;
-            padding-bottom: 1rem !important;
-            padding-left: 0.5rem !important;
-            padding-right: 0.5rem !important;
-        }
-        /* Forces desktop row metric splits to stack vertically on phone screens */
-        div[data-testid="stMetric"] {
-            padding: 12px !important;
-            margin-bottom: 8px !important;
-        }
-        /* Shrink header font metrics slightly so they don't break lines awkwardly */
-        h3 { font-size: 1.4rem !important; }
+        h3 { font-size: 1.35rem !important; }
         h4 { font-size: 1.1rem !important; }
+        div[data-testid="stMetricValue"] > div { font-size: 1.5rem !important; }
     }
     </style>
     """, unsafe_allow_html=True)
@@ -46,7 +56,7 @@ st.markdown("""
 st.write("### 🧊 TOTAL INVESTMENT PORTFOLIO (CAD GLOBAL VIEW)")
 st.markdown("---")
 
-# --- 2. DATA HANDLING & BACKUP MANAGEMENT ---
+# --- 2. DATA HANDLING & STORAGE ENGINE ---
 CSV_FILE = "portfolio_inventory.csv"
 
 def load_data():
@@ -58,7 +68,6 @@ def load_data():
         return df
     return pd.DataFrame(columns=["Ticker", "Broker", "Account", "Shares"])
 
-# Weekend-proof corporate data harvester pulling native distributions explicitly
 @st.cache_data(ttl=60)
 def get_market_data(tickers_list):
     price_dict = {}
@@ -91,20 +100,16 @@ def get_market_data(tickers_list):
                 else:
                     price_dict[t_up]["currency"] = "USD"
                 
-                # BULLETPROOF RE-ENGINEERING: Fallback to static slice indexing
                 div_series = ticker_data.dividends
                 if div_series is not None and not div_series.empty:
-                    # Snag standalone latest distribution metrics
                     price_dict[t_up]["last_div_amt"] = float(div_series.iloc[-1])
                     price_dict[t_up]["last_div_date"] = div_series.index[-1].strftime('%Y-%m-%d')
-                    
-                    # Core Fix: Sum up the last 4 corporate payout values manually to bypass weekend date bugs
                     price_dict[t_up]["annual_div"] = float(div_series.iloc[-4:].sum())
         except Exception:
             pass
     return price_dict, usd_cad_rate
 
-# --- 3. SIDEBAR UTILITIES ---
+# --- 3. SIDEBAR CONTROLS ---
 st.sidebar.header("🔄 Adjust Portfolio")
 df_current = load_data()
 
@@ -163,7 +168,7 @@ if submit_button and ticker:
     df.to_csv(CSV_FILE, index=False)
     st.rerun()
 
-# --- 4. CORE ENGINE DISPLAY & DATA CALCULATIONS ---
+# --- 4. DATA ENGINE RUNTIME CALCULATIONS ---
 df_inv = load_data()
 
 if not df_inv.empty:
@@ -177,69 +182,15 @@ if not df_inv.empty:
     
     df_inv["Price (CAD)"] = df_inv.apply(lambda r: 1.00 if r["Raw Price"] == 0.0 else (r["Raw Price"] * usd_cad_rate if r["Currency"] == "USD" else r["Raw Price"]), axis=1)
     df_inv["Total Value (CAD)"] = df_inv["Shares"] * df_inv["Price (CAD)"]
-    
     df_inv["Annual Income (CAD)"] = df_inv.apply(lambda r: (float(r["Shares"]) * float(r["Annual Div per Share"]) * usd_cad_rate) if r["Currency"] == "USD" else (float(r["Shares"]) * float(r["Annual Div per Share"])), axis=1)
     
     total_net_worth = df_inv["Total Value (CAD)"].sum()
     total_dividends = df_inv["Annual Income (CAD)"].sum()
     
-    # Responsive Column Layout Boxes
+    # Render Master Metric Boxes Natively
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Net Worth (CAD)", f"${total_net_worth:,.2f}")
     col2.metric("Projected Annual Dividends", f"${total_dividends:,.2f}")
     col3.metric("FX Rate (USD/CAD)", f"${usd_cad_rate:.4f}")
     col4.metric("Total Asset Rows", len(df_inv))
     st.markdown("---")
-
-    # --- 🏆 TOP 20 GLOBAL HOLDINGS CONSOLIDATOR ---
-    st.markdown("### 🏆 Top 20 Consolidated Global Holdings")
-    df_top = df_inv.groupby(["Ticker", "Currency", "Raw Price", "Price (CAD)"]).agg({"Shares": "sum", "Total Value (CAD)": "sum"}).reset_index()
-    df_top["Portfolio Weight"] = (df_top["Total Value (CAD)"] / total_net_worth) * 100
-    df_top = df_top.sort_values(by="Total Value (CAD)", ascending=False).head(20)
-    df_top["Live Price"] = df_top.apply(lambda r: "Manual Override" if r["Raw Price"] == 0.0 else f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1)
-    
-    st.dataframe(df_top[["Ticker", "Shares", "Live Price", "Total Value (CAD)", "Portfolio Weight"]].style.format({"Shares": "{:.6f}", "Total Value (CAD)": "${:,.2f}", "Portfolio Weight": "{:.2f}%"}), use_container_width=True, hide_index=True)
-
-    # --- 📅 RECENT DIVIDEND HISTORY LOG ---
-    st.markdown("### 📅 Recent Dividend History (Last Distributions)")
-    df_div_log = pd.DataFrame([t.upper().strip() for t in unique_tickers], columns=["Ticker"])
-    df_div_log["Last Payout"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("last_div_amt", 0.0))
-    df_div_log["Currency"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("currency", "CAD"))
-    df_div_log["Payment Date"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("last_div_date", "N/A"))
-    df_div_log = df_div_log[df_div_log["Last Payout"] > 0]
-    
-    if not df_div_log.empty:
-        shares_map = df_inv.groupby("Ticker")["Shares"].sum().to_dict()
-        df_div_log["Total Shares Held"] = df_div_log["Ticker"].map(shares_map)
-        df_div_log["Estimated Payout"] = df_div_log["Last Payout"] * df_div_log["Total Shares Held"]
-        
-        df_div_log["Distribution Amount"] = df_div_log.apply(lambda r: f"${r['Last Payout']:,.4f} {r['Currency']}", axis=1)
-        df_div_log["Total Cash Received"] = df_div_log.apply(lambda r: f"${r['Estimated Payout']:,.2f} {r['Currency']}", axis=1)
-        df_div_log = df_div_log.sort_values(by="Payment Date", ascending=False)
-        
-        st.dataframe(df_div_log[["Ticker", "Distribution Amount", "Total Shares Held", "Total Cash Received", "Payment Date"]].style.format({"Total Shares Held": "{:,.2f}"}), use_container_width=True, hide_index=True)
-    else:
-        st.info("No active dividend histories detected.")
-
-    # --- 📋 COMPLETE LOCATION & ACCOUNT BREAKDOWNS ---
-    st.markdown("---")
-    st.markdown("### 📋 Complete Location & Account Breakdown")
-    df_display = df_inv.copy()
-    df_display["Live Price"] = df_display.apply(lambda r: "Manual Override" if r["Raw Price"] == 0.0 else f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1)
-    df_display = df_display.sort_values(by=["Broker", "Ticker"])
-    
-    st.dataframe(df_display[["Ticker", "Broker", "Account", "Shares", "Live Price", "Total Value (CAD)"]].style.format({"Shares": "{:.6f}", "Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
-
-    # --- 📂 VALUATION SUMMARY BUCKETS ---
-    st.markdown("---")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.write("#### 📂 Valuation by Account (CAD)")
-        acct_summary = df_inv.groupby("Account")["Total Value (CAD)"].sum().reset_index()
-        st.dataframe(acct_summary.style.format({"Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
-    with c2:
-        st.write("#### 🏦 Valuation by Location (CAD)")
-        broker_summary = df_inv.groupby("Broker")["Total Value (CAD)"].sum().reset_index()
-        st.dataframe(broker_summary.style.format({"Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
-else:
-    st.info("Your inventory database file is currently empty. Upload your backup file to restore.")
