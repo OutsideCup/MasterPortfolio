@@ -99,16 +99,12 @@ if uploaded_file is not None:
 
 st.sidebar.markdown("---")
 
-# Shortened form controls to stay well within editor margins
 with st.sidebar.form(key="update_form", clear_on_submit=True):
     ticker = st.text_input("Ticker Symbol").upper().strip()
-    
     brk_opts = ["TD Waterhouse", "Wealthsimple", "Interactive Brokers", "DRIP / Transfer Agent", "Other"]
     broker = st.selectbox("Brokerage", brk_opts)
-    
     acct_opts = ["RRSP", "TFSA", "Non-Reg", "Crypto", "Direct Registered"]
     account = st.selectbox("Account Type", acct_opts)
-    
     new_shares = st.number_input("Shares / Cash", step=0.000001, format="%.6f")
     submit_button = st.form_submit_button(label="Update Inventory")
 
@@ -141,16 +137,15 @@ if not df_inv.empty:
     df_inv["Total Value (CAD)"] = df_inv["Shares"] * df_inv["Price (CAD)"]
     df_inv["Annual Income (CAD)"] = df_inv.apply(lambda r: (float(r["Shares"]) * float(r["Annual Div per Share"]) * usd_cad_rate) if r["Currency"] == "USD" else (float(r["Shares"]) * float(r["Annual Div per Share"])), axis=1)
     
-    total_net_worth = df_inv["Total Value (CAD)"].sum()
+    total_portfolio_value = df_inv["Total Value (CAD)"].sum()
     total_dividends = df_inv["Annual Income (CAD)"].sum()
     
-    # --- 4. NATIVE, BORDERED SUMMARY METRIC CARDS ---
-    # Fits cleanly on desktop and scales perfectly to dark/light mobile templates
+    # --- 4. HIGH-CONTRAST METRIC CARDS (LABEL UPDATE) ---
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         with st.container(border=True):
-            st.write("TOTAL NET WORTH (CAD)")
-            st.subheader(f"${total_net_worth:,.2f}")
+            st.write("TOTAL PORTFOLIO (CAD)")
+            st.subheader(f"${total_portfolio_value:,.2f}")
     with col2:
         with st.container(border=True):
             st.write("PROJECTED ANNUAL DIVIDENDS")
@@ -165,57 +160,3 @@ if not df_inv.empty:
             st.subheader(f"{len(df_inv)}")
 
     st.markdown("---")
-
-    # --- 🏆 TOP 20 GLOBAL HOLDINGS CONSOLIDATOR ---
-    st.markdown("### 🏆 Top 20 Consolidated Global Holdings")
-    df_top = df_inv.groupby(["Ticker", "Currency", "Raw Price", "Price (CAD)"]).agg({"Shares": "sum", "Total Value (CAD)": "sum"}).reset_index()
-    df_top["Portfolio Weight"] = (df_top["Total Value (CAD)"] / total_net_worth) * 100
-    df_top = df_top.sort_values(by="Total Value (CAD)", ascending=False).head(20)
-    df_top["Live Price"] = df_top.apply(lambda r: "Manual Override" if r["Raw Price"] == 0.0 else f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1)
-    
-    st.dataframe(df_top[["Ticker", "Shares", "Live Price", "Total Value (CAD)", "Portfolio Weight"]].style.format({"Shares": "{:.6f}", "Total Value (CAD)": "${:,.2f}", "Portfolio Weight": "{:.2f}%"}), use_container_width=True, hide_index=True)
-
-    # --- 📅 RECENT DIVIDEND HISTORY LOG ---
-    st.markdown("### 📅 Recent Dividend History (Last Distributions)")
-    df_div_log = pd.DataFrame([t.upper().strip() for t in unique_tickers], columns=["Ticker"])
-    df_div_log["Last Payout"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("last_div_amt", 0.0))
-    df_div_log["Currency"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("last_div_date", "CAD"))
-    df_div_log["Payment Date"] = df_div_log["Ticker"].apply(lambda x: market_data.get(x, {}).get("last_div_date", "N/A"))
-    
-    # Simple, short filtering syntax to avoid editor clipping errors
-    df_div_log = df_div_log[df_div_log["Last Payout"] > 0]
-    
-    if not df_div_log.empty:
-        shares_map = df_inv.groupby("Ticker")["Shares"].sum().to_dict()
-        df_div_log["Total Shares Held"] = df_div_log["Ticker"].map(shares_map)
-        df_div_log["Estimated Payout"] = df_div_log["Last Payout"] * df_div_log["Total Shares Held"]
-        df_div_log["Distribution Amount"] = df_div_log.apply(lambda r: f"${r['Last Payout']:,.4f}", axis=1)
-        df_div_log["Total Cash Received"] = df_div_log.apply(lambda r: f"${r['Estimated Payout']:,.2f}", axis=1)
-        df_div_log = df_div_log.sort_values(by="Payment Date", ascending=False)
-        
-        st.dataframe(df_div_log[["Ticker", "Distribution Amount", "Total Shares Held", "Total Cash Received", "Payment Date"]].style.format({"Total Shares Held": "{:,.2f}"}), use_container_width=True, hide_index=True)
-    else:
-        st.info("No active dividend histories detected.")
-
-    # --- 📋 COMPLETE LOCATION & ACCOUNT BREAKDOWNS ---
-    st.markdown("---")
-    st.markdown("### 📋 Complete Location & Account Breakdown")
-    df_display = df_inv.copy()
-    df_display["Live Price"] = df_display.apply(lambda r: "Manual Override" if r["Raw Price"] == 0.0 else f"${r['Raw Price']:,.2f} {r['Currency']}", axis=1)
-    df_display = df_display.sort_values(by=["Broker", "Ticker"])
-    
-    st.dataframe(df_display[["Ticker", "Broker", "Account", "Shares", "Live Price", "Total Value (CAD)"]].style.format({"Shares": "{:.6f}", "Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
-
-    # --- 📂 VALUATION SUMMARY BUCKETS ---
-    st.markdown("---")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.write("#### 📂 Valuation by Account (CAD)")
-        acct_summary = df_inv.groupby("Account")["Total Value (CAD)"].sum().reset_index()
-        st.dataframe(acct_summary.style.format({"Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
-    with c2:
-        st.write("#### 🏦 Valuation by Location (CAD)")
-        broker_summary = df_inv.groupby("Broker")["Total Value (CAD)"].sum().reset_index()
-        st.dataframe(broker_summary.style.format({"Total Value (CAD)": "${:,.2f}"}), use_container_width=True, hide_index=True)
-else:
-    st.info("Your inventory database file is currently empty. Upload your backup file to restore.")
