@@ -3,8 +3,11 @@ import pandas as pd
 import os
 import yfinance as yf
 
-# --- 1. SETUP & CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="Portfolio Income Cockpit")
+# --- 1. SETUP ENGINE ---
+st.set_page_config(
+    layout="wide",
+    page_title="Outside Cup Portfolio"
+)
 st.write("### 🧊 TOTAL INVESTMENT PORTFOLIO (CAD GLOBAL VIEW)")
 st.markdown("---")
 
@@ -60,7 +63,7 @@ def get_market_data(tickers_list):
             pass
     return price_dict, usd_cad_rate
 
-# --- 2. SIDEBAR MANDATORY UPLOAD SYSTEMS (STANDALONE ENGINE) ---
+# --- 2. STANDALONE RESTORE UTILITIES ---
 st.sidebar.header("📥 Data Management")
 df_current = load_data()
 
@@ -96,13 +99,13 @@ if uploaded_file is not None:
             st.rerun()
         elif len(restore_df.columns) >= 4:
             fallback_df = restore_df.iloc[:, :4].copy()
-            # Split list mapping vertically to completely safeguard line margins
-            fallback_df.columns = [
-                "Ticker", 
-                "Broker", 
-                "Account", 
-                "Shares"
-            ]
+            # Absolute baseline list inputs preventing margin clipping bugs
+            f_cols = []
+            f_cols.append("Ticker")
+            f_cols.append("Broker")
+            f_cols.append("Account")
+            f_cols.append("Shares")
+            fallback_df.columns = f_cols
             fallback_df.to_csv(CSV_FILE, index=False)
             st.sidebar.success("✅ Layout Restored!")
             st.rerun()
@@ -111,7 +114,7 @@ if uploaded_file is not None:
 
 st.sidebar.markdown("---")
 
-# --- 3. STANDALONE SINGLE-LINE UPDATE FORM ---
+# --- 3. ROW EDITING CONTROLS ---
 st.sidebar.subheader("🔄 Adjust Individual Rows")
 with st.sidebar.form(key="update_form", clear_on_submit=True):
     ticker = st.text_input(label="Ticker Symbol").upper().strip()
@@ -121,3 +124,5 @@ with st.sidebar.form(key="update_form", clear_on_submit=True):
     
     acct_opts = ["RRSP", "TFSA", "Non-Reg", "Crypto", "Direct Registered"]
     account = st.selectbox(label="Account Type", options=acct_opts)
+    
+    new_shares = st.number_input(label="Shares / Cash Amount", step=0
