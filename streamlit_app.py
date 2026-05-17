@@ -3,60 +3,11 @@ import pandas as pd
 import os
 import yfinance as yf
 
-# --- 1. SETUP & THEME CONFIGURATION (ADVANCED MOBILE CSS) ---
+# --- 1. SETUP & CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="Portfolio Income Cockpit")
-
-st.markdown("""
-    <style>
-    /* Force responsive fluid containers for small screens */
-    .block-container {
-        padding-top: 1.5rem !important;
-        padding-bottom: 1.5rem !important;
-        padding-left: 0.75rem !important;
-        padding-right: 0.75rem !important;
-    }
-    
-    /* UNIVERSAL METRIC CARD FIX: Forces explicit high-contrast visibility */
-    div[data-testid="stMetric"] {
-        background-color: rgba(128, 128, 128, 0.08) !important;
-        border: 1px solid rgba(128, 128, 128, 0.2) !important;
-        border-radius: 10px !important;
-        padding: 16px !important;
-        margin-bottom: 12px !important;
-    }
-    
-    /* Ensure metric labels and numbers auto-adjust contrast dynamically */
-    div[data-testid="stMetricLabel"] > div {
-        color: inherit !important;
-        opacity: 0.8 !important;
-        font-size: 0.85rem !important;
-        text-transform: uppercase !important;
-        font-weight: 600 !important;
-    }
-    div[data-testid="stMetricValue"] > div {
-        color: inherit !important;
-        font-size: 1.75rem !important;
-        font-weight: 700 !important;
-    }
-    
-    /* Fix mobile table wrapping and squishing */
-    .stDataFrame div {
-        font-size: 0.9rem !important;
-    }
-    
-    /* Mobile font scaler */
-    @media (max-width: 768px) {
-        h3 { font-size: 1.35rem !important; }
-        h4 { font-size: 1.1rem !important; }
-        div[data-testid="stMetricValue"] > div { font-size: 1.5rem !important; }
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
 st.write("### 🧊 TOTAL INVESTMENT PORTFOLIO (CAD GLOBAL VIEW)")
 st.markdown("---")
 
-# --- 2. DATA HANDLING & STORAGE ENGINE ---
 CSV_FILE = "portfolio_inventory.csv"
 
 def load_data():
@@ -109,7 +60,7 @@ def get_market_data(tickers_list):
             pass
     return price_dict, usd_cad_rate
 
-# --- 3. SIDEBAR CONTROLS ---
+# --- 2. SIDEBAR OPERATIONS ---
 st.sidebar.header("🔄 Adjust Portfolio")
 df_current = load_data()
 
@@ -152,45 +103,4 @@ with st.sidebar.form(key="update_form", clear_on_submit=True):
     ticker = st.text_input("Ticker Symbol").upper().strip()
     broker = st.selectbox("Brokerage", ["TD Waterhouse", "Wealthsimple", "Interactive Brokers", "DRIP / Transfer Agent", "Other"])
     account = st.selectbox("Account Type", ["RRSP", "TFSA", "Non-Reg", "Crypto", "Direct Registered"])
-    new_shares = st.number_input("Total Shares / Cash Amount", step=0.000001, format="%.6f")
-    submit_button = st.form_submit_button(label="Update Inventory")
-
-if submit_button and ticker:
-    df = load_data()
-    ticker_clean = ticker.upper().strip()
-    mask = (df['Ticker'] == ticker_clean) & (df['Account'] == account) & (df['Broker'] == broker)
-    if mask.any():
-        df.loc[mask, 'Shares'] = new_shares
-    else:
-        new_row = pd.DataFrame([{"Ticker": ticker_clean, "Broker": broker, "Account": account, "Shares": new_shares}])
-        df = pd.concat([df, new_row], ignore_index=True)
-    df = df[df['Shares'] != 0]
-    df.to_csv(CSV_FILE, index=False)
-    st.rerun()
-
-# --- 4. DATA ENGINE RUNTIME CALCULATIONS ---
-df_inv = load_data()
-
-if not df_inv.empty:
-    unique_tickers = list(df_inv["Ticker"].unique())
-    with st.spinner("🔄 Refreshing Ledger Infrastructure..."):
-        market_data, usd_cad_rate = get_market_data(unique_tickers)
-    
-    df_inv["Raw Price"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"price": 0.0})["price"])
-    df_inv["Currency"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"currency": "CAD"})["currency"])
-    df_inv["Annual Div per Share"] = df_inv["Ticker"].apply(lambda x: market_data.get(x, {"annual_div": 0.0})["annual_div"])
-    
-    df_inv["Price (CAD)"] = df_inv.apply(lambda r: 1.00 if r["Raw Price"] == 0.0 else (r["Raw Price"] * usd_cad_rate if r["Currency"] == "USD" else r["Raw Price"]), axis=1)
-    df_inv["Total Value (CAD)"] = df_inv["Shares"] * df_inv["Price (CAD)"]
-    df_inv["Annual Income (CAD)"] = df_inv.apply(lambda r: (float(r["Shares"]) * float(r["Annual Div per Share"]) * usd_cad_rate) if r["Currency"] == "USD" else (float(r["Shares"]) * float(r["Annual Div per Share"])), axis=1)
-    
-    total_net_worth = df_inv["Total Value (CAD)"].sum()
-    total_dividends = df_inv["Annual Income (CAD)"].sum()
-    
-    # Render Master Metric Boxes Natively
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Net Worth (CAD)", f"${total_net_worth:,.2f}")
-    col2.metric("Projected Annual Dividends", f"${total_dividends:,.2f}")
-    col3.metric("FX Rate (USD/CAD)", f"${usd_cad_rate:.4f}")
-    col4.metric("Total Asset Rows", len(df_inv))
-    st.markdown("---")
+    new_shares = st.number_input("Total Shares
